@@ -1,0 +1,18 @@
+# Ultralytics YOLO 🚀, AGPL-3.0 许可证
+# BoT-SORT 跟踪器的默认 YOLO 跟踪器设置 https://github.com/NirAharon/BoT-SORT
+
+tracker_type: botsort # 跟踪器类型，['botsort', 'bytetrack']
+track_high_thresh: 0.6 # 第一次关联的阈值
+track_low_thresh: 0.6 # 第二次关联的阈值
+new_track_thresh: 0.6 # 如果检测结果不匹配任何轨迹，则初始化新轨迹的阈值
+track_buffer: 600 # 计算何时删除轨迹的缓冲区
+match_thresh: 0.9 # 匹配轨迹的阈值
+fuse_score: True # 是否在匹配前将置信度分数与 iou 距离融合
+# min_box_area: 10  # 最小框面积的阈值（用于跟踪器评估，目前未使用）
+
+# BoT-SORT 设置
+gmc_method: sparseOptFlow # 全局运动补偿方法
+# ReID 模型相关阈值（暂未支持）
+proximity_thresh: 0.6
+appearance_thresh: 0.25
+with_reid: False

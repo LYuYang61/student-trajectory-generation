@@ -1,0 +1,8 @@
+model_path: "D:/lyycode02/student-trajectory-generation/backend/resources/models/yolov8m.pt"
+tracker_config: "D:/lyycode02/student-trajectory-generation/backend/resources/configs/bytetrack.yaml"
+conf: 0.6
+device: "cpu"
+iou: 0.6
+img_size: [ 720, 1080 ]
+video_source: "resources/videos/2.mp4"
+show: True
