@@ -61,11 +61,11 @@ export default {
       infoWindows: [],
       // 校园建筑物基本信息
       buildings: [
-        {name: '教学楼', position: [118.719506, 30.908973], icon: 'building'},
-        {name: '图书馆', position: [118.719906, 30.910173], icon: 'library'},
-        {name: '食堂', position: [118.720606, 30.909373], icon: 'restaurant'},
-        {name: '宿舍楼', position: [118.721106, 30.908773], icon: 'dormitory'},
-        {name: '体育馆', position: [118.720206, 30.910773], icon: 'gym'}
+        {name: '新安学堂', position: [118.718797, 30.911546], icon: 'building'},
+        {name: '图书馆', position: [118.716685, 30.909624], icon: 'library'},
+        {name: '食堂', position: [118.720928, 30.911897], icon: 'restaurant'},
+        {name: '操场', position: [118.722249, 30.912036], icon: 'gym'},
+        {name: '体育馆', position: [118.72153, 30.911107], icon: 'gym'}
       ]
     }
   },
@@ -208,10 +208,10 @@ export default {
     addCampusBoundary () {
       // 添加校园边界线
       const boundary = [
-        new BMapGL.Point(118.717506, 30.908273),
-        new BMapGL.Point(118.722106, 30.908273),
-        new BMapGL.Point(118.722106, 30.911273),
-        new BMapGL.Point(118.717506, 30.911273)
+        new BMapGL.Point(118.714636, 30.91173),
+        new BMapGL.Point(118.71866, 30.914929),
+        new BMapGL.Point(118.7259, 30.912474),
+        new BMapGL.Point(118.719321, 30.907731)
       ]
 
       // 创建多边形

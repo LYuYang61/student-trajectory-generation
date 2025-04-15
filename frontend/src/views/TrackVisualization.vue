@@ -272,11 +272,11 @@ export default {
       },
       // 模拟摄像头数据
       cameras: [
-        { id: '1', name: '正门', location: '校园正门', position: [118.718406, 30.909773] },
-        { id: '2', name: '教学楼', location: '第一教学楼', position: [118.719506, 30.908973] },
-        { id: '3', name: '食堂', location: '第一食堂', position: [118.720606, 30.909373] },
-        { id: '4', name: '图书馆', location: '图书馆正门', position: [118.719906, 30.910173] },
-        { id: '5', name: '宿舍楼', location: '1号宿舍楼', position: [118.721106, 30.908773] }
+        { id: '1', name: '新安学堂', location: '新安学堂正门', position: [118.718797, 30.911546] },
+        { id: '2', name: '图书馆', location: '图书馆正门', position: [118.716685, 30.909624] },
+        { id: '3', name: '食堂', location: '南漪湖餐厅', position: [118.720928, 30.911897] },
+        { id: '4', name: '操场', location: '操场正门', position: [118.722249, 30.912036] },
+        { id: '5', name: '体育馆', location: '体育馆正门', position: [118.72153, 30.911107] }
       ]
     }
   },
