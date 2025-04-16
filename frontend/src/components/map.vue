@@ -321,9 +321,15 @@ export default {
 
       console.log(`添加摄像头标记，共${this.trajectoryData.cameras.length}个摄像头`)
 
+      // 按照相机ID在轨迹中的顺序创建相机索引映射
+      const cameraOrder = {}
       this.trajectoryData.cameras.forEach((camera, index) => {
+        cameraOrder[camera.id] = index
+      })
+
+      this.trajectoryData.cameras.forEach((camera) => {
         if (!camera.position || camera.position.length !== 2) {
-          console.warn(`摄像头 ${index} 位置数据无效:`, camera)
+          console.warn(`摄像头 ${camera.id} 位置数据无效:`, camera)
           return
         }
 
@@ -378,8 +384,8 @@ export default {
           }, 100)
         })
 
-        // 添加标签
-        const label = new BMapGL.Label(`${index + 1}`, {
+        // 添加标签 - 使用摄像头ID而不是索引
+        const label = new BMapGL.Label(`${camera.id}`, {
           offset: new BMapGL.Size(5, 5)
         })
         label.setStyle({
@@ -395,7 +401,7 @@ export default {
         })
         marker.setLabel(label)
 
-        console.log(`已添加摄像头标记 ${index + 1}:`, camera.position)
+        console.log(`已添加摄像头标记 ${camera.id}:`, camera.position)
       })
     },
 

@@ -116,9 +116,9 @@
             <el-form :model="reIdOptions" label-width="120px">
               <el-form-item label="重识别算法">
                 <el-select v-model="reIdOptions.algorithm">
-                  <el-option label="基于特征点的匹配" value="feature_points"></el-option>
-                  <el-option label="深度学习 CNN" value="deep_cnn"></el-option>
-                  <el-option label="Siamese 网络" value="siamese"></el-option>
+                  <el-option label="OSNetReID" value="osnet"></el-option>
+                  <el-option label="MGNReID" value="mgn"></el-option>
+                  <el-option label="TransReID" value="transformer"></el-option>
                 </el-select>
               </el-form-item>
               <el-form-item label="匹配阈值">
@@ -203,8 +203,8 @@
           </div>
           <div class="video-player">
             <div class="video-container">
-              <video ref="videoPlayer" controls class="video-element">
-                <source :src="selectedVideo.url" type="video/mp4">
+              <video ref="videoPlayer" controls class="video-element" @canplay="handleCanPlay">
+                <source :src="videoUrl" type="video/mp4">
                 您的浏览器不支持 video 标签。
               </video>
             </div>
@@ -249,7 +249,7 @@ export default {
       },
       filterResults: [],
       reIdOptions: {
-        algorithm: 'deep_cnn',
+        algorithm: 'osnet',
         threshold: 70
       },
       reIdProgress: {
@@ -277,7 +277,9 @@ export default {
         { id: '3', name: '食堂', location: '南漪湖餐厅', position: [118.720928, 30.911897] },
         { id: '4', name: '操场', location: '操场正门', position: [118.722249, 30.912036] },
         { id: '5', name: '体育馆', location: '体育馆正门', position: [118.72153, 30.911107] }
-      ]
+      ],
+      // 存储视频URL的基础路径
+      baseVideoUrl: ''
     }
   },
   computed: {
@@ -294,7 +296,15 @@ export default {
     },
     traversedCameras () {
       return this.reIdResults.map(item => item.cameraId)
+    },
+    videoUrl () {
+      // 使用基础URL和公共路径构建完整的视频URL
+      return this.selectedVideo.url || ''
     }
+  },
+  created () {
+    // 获取基础URL，用于正确构建资源路径
+    this.baseVideoUrl = process.env.BASE_URL || ''
   },
   methods: {
     formatTimeRange (range) {
@@ -518,32 +528,44 @@ export default {
         }
       }
     },
+    handleCanPlay () {
+      const videoPlayer = this.$refs.videoPlayer
+      if (videoPlayer && videoPlayer.paused) {
+        videoPlayer.play().catch(e => {
+          console.log('视频播放失败:', e)
+          this.$message({
+            message: '请点击视频进行播放',
+            type: 'info'
+          })
+        })
+      }
+    },
     handleCameraClick (cameraId) {
-      // 查找对应的摄像头数据
+      // 查找对应的摄像头数据和结果
       const camera = this.cameras.find(c => c.id === cameraId)
-      if (!camera) return
-
-      // 查找对应的重识别结果
       const result = this.reIdResults.find(r => r.cameraId === cameraId)
-      if (!result) return
+      if (!camera || !result) return
 
-      // 设置视频信息
+      // 设置视频信息 - 修改视频路径
       this.selectedVideo = {
-        url: `https://www.example.com/videos/camera${cameraId}_${this.filterForm.studentId}.mp4`, // 实际应用中替换为真实视频URL
+        url: 'target.mp4', // 不使用前导斜杠，避免路径解析问题
         cameraId: camera.id,
         location: camera.location,
         timestamp: result.timestamp
       }
 
-      // 显示视频面板
       this.showVideo = true
 
-      // 在视频加载完成后自动播放
+      // 确保视频元素已加载
       this.$nextTick(() => {
         if (this.$refs.videoPlayer) {
-          this.$refs.videoPlayer.load()
+          // 移除load()调用，避免中断play()请求
           this.$refs.videoPlayer.play().catch(e => {
-            console.log('视频自动播放失败:', e)
+            console.error('视频播放失败:', e)
+            this.$message({
+              message: '请点击视频进行播放',
+              type: 'info'
+            })
           })
         }
       })
@@ -685,119 +707,116 @@ export default {
   overflow-y: auto; /* 垂直滚动条 */
 }
 
-.video-info {
-  padding: 10px;
-  background-color: #F5F7FA;
-  border-radius: 4px;
-  overflow-y: auto; /* 垂直滚动条 */
-  max-height: 200px; /* 设置最大高度 */
-}
-
-.reference-image {
+.video-player {
   width: 100%;
-  max-height: 200px;
-  object-fit: contain;
-  margin-bottom: 10px;
-}
-
-.result-image {
-  width: 100%;
-  height: 150px;
-  object-fit: cover;
-}
-
-.result-info {
-  padding: 10px;
-}
-
-.no-results {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 30px;
-  color: #909399;
-}
-
-.no-results i {
-  font-size: 48px;
-  margin-bottom: 15px;
-}
-
-.reid-progress {
-  margin-bottom: 20px;
-}
-
-.progress-item {
-  margin-bottom: 15px;
-}
-
-.progress-label {
-  display: block;
-  margin-bottom: 5px;
-}
-
-.student-info p {
-  margin-bottom: 10px;
-}
-
-.trajectory-legend {
-  margin-top: 20px;
-  border-top: 1px solid #EBEEF5;
-  padding-top: 15px;
-}
-
-.legend-item {
-  display: flex;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.legend-color {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  margin-right: 8px;
 }
 
 .video-container {
   width: 100%;
   margin-bottom: 10px;
+  position: relative;
+  padding-top: 56.25%; /* 16:9 宽高比 */
 }
 
 .video-element {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
+  height: 100%;
+}
+
+.video-info {
+  font-size: 14px;
+  color: #666;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 5px;
+}
+
+.legend-color {
+  width: 15px;
+  height: 15px;
+  margin-right: 5px;
+  border-radius: 50%;
 }
 
 .nav-buttons {
-  display: flex;
-  justify-content: center;
   margin-top: 20px;
-  margin-bottom: 20px;
+  text-align: center;
+}
+
+.upload-demo {
+  margin-top: 10px;
+}
+
+.reference-image {
+  width: 100px;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.no-results {
+  text-align: center;
+  color: #999;
+}
+
+.result-item {
+  display: flex;
+  align-items: center;
+}
+
+.result-image {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 4px;
+  margin-right: 10px;
+}
+
+.result-info {
+  flex: 1;
+}
+
+.progress-item {
+  margin-bottom: 10px;
+}
+
+.progress-label {
+  font-size: 14px;
+  margin-bottom: 5px;
 }
 
 .reid-options {
   margin-top: 20px;
 }
 
-/* Ensure carousel items have proper spacing */
-.el-carousel__item {
-  padding: 10px;
+.reid-progress {
+  margin-bottom: 20px;
 }
 
-.result-item {
-  background-color: white;
-  border-radius: 4px;
-  overflow: hidden;
-  height: 100%;
-  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+.student-info {
+  font-size: 14px;
+  color: #333;
 }
 
-/* Animation for transitions */
-.fade-enter-active, .fade-leave-active {
-  transition: opacity 0.5s;
+.trajectory-legend {
+  margin-top: 10px;
 }
-.fade-enter, .fade-leave-to {
-  opacity: 0;
+
+.trajectory-legend .legend-item {
+  margin-bottom: 0;
 }
+
+.trajectory-legend .legend-color {
+  width: 15px;
+  height: 15px;
+  margin-right: 5px;
+  border-radius: 50%;
+}
+
 </style>

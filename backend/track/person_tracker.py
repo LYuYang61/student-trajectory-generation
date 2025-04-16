@@ -10,7 +10,7 @@ class PersonTracker:
                  model_path='yolov8m.pt',
                  tracker_config="botsort.yaml",
                  conf=0.5,
-                 device='cpu',
+                 device='cuda:0',
                  iou=0.5,
                  img_size=(640, 640),
                  max_trace_length=50):  # 最大轨迹保留长度

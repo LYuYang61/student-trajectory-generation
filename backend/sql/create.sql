@@ -1,4 +1,4 @@
--- 创建 `student_records` 表，用于存储学生记录
+use trajectory;-- 创建 `student_records` 表，用于存储学生记录
 CREATE TABLE student_records (
     id INTEGER PRIMARY KEY AUTO_INCREMENT, -- 自增主键
     student_id VARCHAR(50), -- 学生学号
