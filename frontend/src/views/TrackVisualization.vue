@@ -231,6 +231,8 @@
 <script>
 import Menu from '@/components/Menu.vue'
 import BaiduMap from '@/components/map.vue'
+import io from 'socket.io-client'
+import {filterRecords, analyzeSpacetimeConstraints, performReID, getTrajectory} from '../api/api'
 
 export default {
   name: 'TrackVisualization',
@@ -279,7 +281,10 @@ export default {
         { id: '5', name: '体育馆', location: '体育馆正门', position: [118.72153, 30.911107] }
       ],
       // 存储视频URL的基础路径
-      baseVideoUrl: ''
+      baseVideoUrl: '',
+      socket: null,
+      isLoading: false,
+      recordIds: []
     }
   },
   computed: {
@@ -305,8 +310,44 @@ export default {
   created () {
     // 获取基础URL，用于正确构建资源路径
     this.baseVideoUrl = process.env.BASE_URL || ''
+    // 连接WebSocket
+    this.connectSocket()
+  },
+  mounted () {
+    // 监听ReID进度更新
+    if (this.socket) {
+      this.socket.on('reid_progress', (data) => {
+        if (data.stage === 'spatialTemporal') {
+          this.reIdProgress.spatialTemporal = data.percentage
+        } else if (data.stage === 'featureMatching') {
+          this.reIdProgress.featureMatching = data.percentage
+        } else if (data.stage === 'crossCamera') {
+          this.reIdProgress.crossCamera = data.percentage
+        } else if (data.stage === 'trajectoryIntegration') {
+          this.reIdProgress.trajectoryIntegration = data.percentage
+        }
+      })
+    }
+  },
+  beforeDestroy () {
+    if (this.socket) {
+      this.socket.disconnect()
+    }
   },
   methods: {
+    connectSocket () {
+      // 连接到WebSocket服务器
+      const serverUrl = process.env.VUE_APP_API_URL || 'http://localhost:5000'
+      this.socket = io(serverUrl)
+
+      this.socket.on('connect', () => {
+        console.log('WebSocket连接成功')
+      })
+
+      this.socket.on('connect_error', (error) => {
+        console.error('WebSocket连接失败:', error)
+      })
+    },
     formatTimeRange (range) {
       if (!range || range.length !== 2) return ''
       const startDate = new Date(range[0])
@@ -337,28 +378,7 @@ export default {
       }
       reader.readAsDataURL(file)
     },
-    startFiltering () {
-      if (!this.filterForm.studentId) {
-        this.$message.error('请输入学号')
-        return
-      }
 
-      // 模拟过滤处理
-      this.$message({
-        message: '正在进行图像过滤...',
-        type: 'info'
-      })
-
-      // 模拟 API 请求的延迟
-      setTimeout(() => {
-        // 生成模拟数据
-        this.generateMockFilterResults()
-        this.$message({
-          message: '过滤完成，找到 ' + this.filterResults.length + ' 条匹配记录',
-          type: 'success'
-        })
-      }, 2000)
-    },
     generateMockFilterResults () {
       // 清空之前的结果
       this.filterResults = []
@@ -407,39 +427,7 @@ export default {
       // 按时间排序
       this.filterResults.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
     },
-    startReId () {
-      // 重置进度
-      this.reIdProgress = {
-        spatialTemporal: 0,
-        crossCamera: 0,
-        featureMatching: 0,
-        trajectoryIntegration: 0
-      }
 
-      this.$message({
-        message: '正在执行重识别...',
-        type: 'info'
-      })
-
-      // 模拟时空约束过滤
-      this.simulateProgress('spatialTemporal', 2000, () => {
-        // 模拟跨摄像头匹配
-        this.simulateProgress('crossCamera', 1500, () => {
-          // 模拟特征提取与匹配
-          this.simulateProgress('featureMatching', 2500, () => {
-            // 模拟轨迹整合
-            this.simulateProgress('trajectoryIntegration', 1000, () => {
-              // 生成重识别结果
-              this.generateMockReIdResults()
-              this.$message({
-                message: '重识别完成',
-                type: 'success'
-              })
-            })
-          })
-        })
-      })
-    },
     simulateProgress (key, duration, callback) {
       const startTime = Date.now()
       const interval = 100 // 更新间隔
@@ -540,6 +528,208 @@ export default {
         })
       }
     },
+    async startFiltering () {
+      if (!this.filterForm.studentId) {
+        this.$message.error('请输入学号')
+        return
+      }
+
+      this.isLoading = true
+      this.$message({
+        message: '正在进行图像过滤...',
+        type: 'info'
+      })
+
+      try {
+        // 准备请求参数
+        const requestData = {
+          studentId: this.filterForm.studentId,
+          startTime: this.filterForm.timeRange[0],
+          endTime: this.filterForm.timeRange[1],
+          attributes: this.filterForm.attributes,
+          referenceImage: this.filterForm.referenceImage
+        }
+
+        // 调用API
+        const response = await filterRecords(requestData)
+
+        if (response.data.status === 'success') {
+          this.filterResults = response.data.data
+
+          this.$message({
+            message: '过滤完成，找到 ' + this.filterResults.length + ' 条匹配记录',
+            type: 'success'
+          })
+        } else {
+          this.$message.error('过滤失败: ' + response.data.message)
+        }
+      } catch (error) {
+        console.error('过滤请求错误:', error)
+        this.$message.error('过滤请求失败，请检查网络连接')
+
+        // 如果API尚未实现，使用模拟数据
+        this.generateMockFilterResults()
+      } finally {
+        this.isLoading = false
+      }
+    },
+
+    async startReId () {
+      // 重置进度
+      this.reIdProgress = {
+        spatialTemporal: 0,
+        crossCamera: 0,
+        featureMatching: 0,
+        trajectoryIntegration: 0
+      }
+
+      this.isLoading = true
+      this.$message({
+        message: '正在执行重识别...',
+        type: 'info'
+      })
+
+      try {
+        // 先进行时空约束分析
+        const spatioTempResponse = await analyzeSpacetimeConstraints({
+          records: this.filterResults
+        })
+
+        if (spatioTempResponse.data.status === 'success') {
+          this.reIdProgress.spatialTemporal = 100
+
+          // 再执行ReID
+          const reidResponse = await performReID({
+            records: spatioTempResponse.data.data,
+            algorithm: this.reIdOptions.algorithm,
+            threshold: this.reIdOptions.threshold
+          })
+
+          if (reidResponse.data.status === 'success') {
+            this.reIdResults = reidResponse.data.reid_results
+            this.recordIds = reidResponse.data.trajectory
+
+            // 最后获取完整轨迹数据
+            await this.loadTrajectoryData()
+
+            this.$message({
+              message: '重识别完成',
+              type: 'success'
+            })
+          } else {
+            this.$message.error('重识别失败: ' + reidResponse.data.message)
+          }
+        } else {
+          this.$message.error('时空约束分析失败: ' + spatioTempResponse.data.message)
+        }
+      } catch (error) {
+        console.error('重识别请求错误:', error)
+        this.$message.error('重识别请求失败，请检查网络连接')
+
+        // 如果API尚未实现，使用模拟数据
+        this.simulateProgress('spatialTemporal', 2000, () => {
+          this.simulateProgress('featureMatching', 1500, () => {
+            this.simulateProgress('crossCamera', 2500, () => {
+              this.simulateProgress('trajectoryIntegration', 1000, () => {
+                this.generateMockReIdResults()
+              })
+            })
+          })
+        })
+      } finally {
+        this.isLoading = false
+      }
+    },
+    async loadTrajectoryData () {
+      try {
+      // 获取轨迹数据
+        const response = await getTrajectory({
+          recordIds: this.recordIds
+        })
+
+        if (response.data.status === 'success') {
+        // 处理轨迹数据，转换成地图组件所需格式
+          this.processTrajectoryData(
+            response.data.trajectory_data,
+            response.data.segments,
+            response.data.anomalies
+          )
+        } else {
+          this.$message.error('获取轨迹数据失败: ' + response.data.message)
+        }
+      } catch (error) {
+        console.error('获取轨迹数据错误:', error)
+        this.$message.error('获取轨迹数据失败，请检查网络连接')
+
+        // 如果API尚未实现，使用模拟数据
+        this.generateTrajectoryData()
+      }
+    },
+
+    processTrajectoryData (trajectoryData, segments, anomalies) {
+    // 从后端数据构建地图组件所需的轨迹数据格式
+      this.trajectoryData = {
+        points: [],
+        cameras: []
+      }
+
+      // 添加摄像头位置
+      const uniqueCameras = new Set()
+      trajectoryData.forEach(record => {
+        if (!uniqueCameras.has(record.camera_id)) {
+          uniqueCameras.add(record.camera_id)
+
+          const cameraInfo = this.cameras.find(c => c.id === record.camera_id.toString())
+          if (cameraInfo) {
+            this.trajectoryData.cameras.push({
+              id: record.camera_id.toString(),
+              name: cameraInfo.name,
+              position: [record.location_x, record.location_y],
+              timestamp: record.timestamp
+            })
+          }
+        }
+      })
+
+      // 添加轨迹点
+      this.trajectoryData.cameras.forEach(camera => {
+      // 添加摄像头点
+        this.trajectoryData.points.push({
+          position: camera.position,
+          type: 'camera',
+          cameraId: camera.id
+        })
+      })
+
+      // 添加路径段点
+      segments.forEach(segment => {
+      // 添加起点和终点之间的路径点
+        const startPos = segment.start_location
+        const endPos = segment.end_location
+
+        // 生成几个中间点模拟路径
+        const pointCount = Math.floor(Math.random() * 3) + 2
+        for (let j = 1; j <= pointCount; j++) {
+          const ratio = j / (pointCount + 1)
+          const x = startPos[0] + (endPos[0] - startPos[0]) * ratio
+          const y = startPos[1] + (endPos[1] - startPos[1]) * ratio
+
+          // 添加轻微随机偏移
+          const offsetX = (Math.random() - 0.5) * 0.0002
+          const offsetY = (Math.random() - 0.5) * 0.0002
+
+          this.trajectoryData.points.push({
+            position: [x + offsetX, y + offsetY],
+            type: 'path'
+          })
+        }
+      })
+
+      // 可以添加对异常点的特殊标记
+      anomalies.forEach(anomaly => {
+      // 在此可以添加异常点的可视化
+      })
+    },
     handleCameraClick (cameraId) {
       // 查找对应的摄像头数据和结果
       const camera = this.cameras.find(c => c.id === cameraId)
@@ -548,7 +738,7 @@ export default {
 
       // 设置视频信息 - 修改视频路径
       this.selectedVideo = {
-        url: 'target.mp4', // 不使用前导斜杠，避免路径解析问题
+        url: 'https://qingwu-oss.oss-cn-heyuan.aliyuncs.com/lian/target.mp4', // 不使用前导斜杠，避免路径解析问题
         cameraId: camera.id,
         location: camera.location,
         timestamp: result.timestamp

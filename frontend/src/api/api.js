@@ -59,6 +59,38 @@ export const stopDetection = () => {
   })
 }
 
+// 添加轨迹可视化相关API
+export const filterRecords = (data) => {
+  return request({
+    method: 'post',
+    url: '/api/filter',
+    data: data
+  })
+}
+
+export const analyzeSpacetimeConstraints = (data) => {
+  return request({
+    method: 'post',
+    url: '/api/spatiotemporal',
+    data: data
+  })
+}
+
+export const performReID = (data) => {
+  return request({
+    method: 'post',
+    url: '/api/reid',
+    data: data
+  })
+}
+
+export const getTrajectory = (data) => {
+  return request({
+    method: 'post',
+    url: '/api/trajectory',
+    data: data
+  })
+}
 // export const test = () => {
 //   return request({
 //     method: 'get',
