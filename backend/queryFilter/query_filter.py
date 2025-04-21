@@ -40,10 +40,19 @@ class QueryFilter:
         logger.info(
             f"Filtering records with: student_id={student_id}, features={features}, time_range={time_range}, camera_ids={camera_ids}")
 
+        # 将特征字典（如果提供）转换为数据库接口所需的格式
+        db_features = None
+        if features:
+            db_features = {}
+            for key, value in features.items():
+                # 只包含布尔值的键值对
+                if isinstance(value, bool):
+                    db_features[key] = value
+
         # 查询数据库
         records = self.db.query_student_records(
             student_id=student_id,
-            features=features,
+            features=db_features,
             time_range=time_range,
             camera_ids=camera_ids
         )
@@ -155,50 +164,41 @@ class QueryFilter:
                        has_bicycle: Optional[bool] = None,
                        has_backpack: Optional[bool] = None,
                        has_umbrella: Optional[bool] = None) -> Dict[str, Any]:
-        """
-        执行完整的过滤流程
+        # 整合所有特征条件
+        all_features = features or {}
+        if has_bicycle is not None:
+            all_features['has_bicycle'] = has_bicycle
+        if has_backpack is not None:
+            all_features['has_backpack'] = has_backpack
+        if has_umbrella is not None:
+            all_features['has_umbrella'] = has_umbrella
 
-        Args:
-            student_id: 学生学号，可选
-            features: 特征字典，可选
-            time_range: 时间范围，可选
-            camera_ids: 摄像头ID列表，可选
-            has_bicycle: 是否骑自行车，可选
-            has_backpack: 是否背包，可选
-            has_umbrella: 是否带雨伞，可选
-
-        Returns:
-            过滤结果字典：
-            {
-                'all_records': 所有符合条件的记录,
-                'sorted_records': 按时间排序的记录,
-                'camera_groups': 按摄像头分组的记录
-            }
-        """
         # 初步过滤
         filtered_records = self.filter_by_criteria(
             student_id=student_id,
-            features=features,
+            features=all_features,
             time_range=time_range,
             camera_ids=camera_ids
         )
 
-        # 根据外观特征过滤
-        appearance_filtered = self.filter_by_appearance(
-            filtered_records,
-            has_bicycle=has_bicycle,
-            has_backpack=has_backpack,
-            has_umbrella=has_umbrella
-        )
-
         # 增强结果
-        enhanced_records = self.enhance_filter_results(appearance_filtered)
+        enhanced_records = self.enhance_filter_results(filtered_records)
+
+        # 确保时间戳是日期时间类型
+        if 'timestamp' in enhanced_records.columns:
+            enhanced_records['timestamp'] = pd.to_datetime(enhanced_records['timestamp'])
 
         # 按时间排序
         sorted_records = self.sort_by_time(enhanced_records)
 
         # 按摄像头分组
         grouped_records = self.group_by_camera(sorted_records)
+
+        # 打印调试信息
+        logger.debug(f"Filtered records: {filtered_records}")
+        logger.debug(f"Enhanced records: {enhanced_records}")
+        logger.debug(f"Sorted records: {sorted_records}")
+        logger.debug(f"Grouped records: {grouped_records}")
 
         return {
             'all_records': enhanced_records,

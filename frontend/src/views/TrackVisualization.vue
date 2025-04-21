@@ -37,8 +37,7 @@
               <el-checkbox-group v-model="filterForm.attributes">
                 <el-checkbox label="umbrella">雨伞</el-checkbox>
                 <el-checkbox label="backpack">背包</el-checkbox>
-                <el-checkbox label="hat">帽子</el-checkbox>
-                <el-checkbox label="glasses">眼镜</el-checkbox>
+                <el-checkbox label="bicycle">自行车</el-checkbox>
               </el-checkbox-group>
             </el-form-item>
             <el-form-item label="参考图片">
@@ -100,12 +99,12 @@
               <el-progress :percentage="reIdProgress.spatialTemporal" :status="reIdProgress.spatialTemporal === 100 ? 'success' : ''"></el-progress>
             </div>
             <div class="progress-item">
-              <span class="progress-label">跨摄像头匹配</span>
-              <el-progress :percentage="reIdProgress.crossCamera" :status="reIdProgress.crossCamera === 100 ? 'success' : ''"></el-progress>
-            </div>
-            <div class="progress-item">
               <span class="progress-label">特征提取与匹配</span>
               <el-progress :percentage="reIdProgress.featureMatching" :status="reIdProgress.featureMatching === 100 ? 'success' : ''"></el-progress>
+            </div>
+            <div class="progress-item">
+              <span class="progress-label">跨摄像头匹配</span>
+              <el-progress :percentage="reIdProgress.crossCamera" :status="reIdProgress.crossCamera === 100 ? 'success' : ''"></el-progress>
             </div>
             <div class="progress-item">
               <span class="progress-label">轨迹整合</span>
@@ -272,7 +271,7 @@ export default {
         location: '',
         timestamp: ''
       },
-      // 模拟摄像头数据
+      // 摄像头数据
       cameras: [
         { id: '1', name: '新安学堂', location: '新安学堂正门', position: [118.718797, 30.911546] },
         { id: '2', name: '图书馆', location: '图书馆正门', position: [118.716685, 30.909624] },
@@ -378,200 +377,96 @@ export default {
       }
       reader.readAsDataURL(file)
     },
-
-    generateMockFilterResults () {
-      // 清空之前的结果
-      this.filterResults = []
-
-      // 生成 3-8 条随机匹配记录
-      const resultCount = Math.floor(Math.random() * 6) + 3
-
-      for (let i = 0; i < resultCount; i++) {
-        // 随机选择摄像头
-        const cameraIndex = Math.floor(Math.random() * this.cameras.length)
-        const camera = this.cameras[cameraIndex]
-
-        // 随机生成匹配的属性
-        const matchedAttributes = []
-        if (this.filterForm.attributes.includes('umbrella') && Math.random() > 0.5) {
-          matchedAttributes.push('雨伞')
-        }
-        if (this.filterForm.attributes.includes('backpack') && Math.random() > 0.3) {
-          matchedAttributes.push('背包')
-        }
-        if (this.filterForm.attributes.includes('hat') && Math.random() > 0.7) {
-          matchedAttributes.push('帽子')
-        }
-        if (this.filterForm.attributes.includes('glasses') && Math.random() > 0.6) {
-          matchedAttributes.push('眼镜')
-        }
-
-        // 生成随机时间戳
-        const startTime = new Date(this.filterForm.timeRange[0]).getTime()
-        const endTime = new Date(this.filterForm.timeRange[1]).getTime()
-        const randomTime = new Date(startTime + Math.random() * (endTime - startTime))
-
-        // 添加到结果中
-        this.filterResults.push({
-          id: i + 1,
-          studentId: this.filterForm.studentId,
-          cameraId: camera.id,
-          location: camera.location,
-          timestamp: randomTime.toLocaleString(),
-          matchedAttributes: matchedAttributes,
-          // 使用占位图像，实际应用中应为真实图像
-          image: `https://picsum.photos/id/${(i + 10) * 10}/300/200`
-        })
-      }
-
-      // 按时间排序
-      this.filterResults.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-    },
-
-    simulateProgress (key, duration, callback) {
-      const startTime = Date.now()
-      const interval = 100 // 更新间隔
-
-      const updateProgress = () => {
-        const elapsed = Date.now() - startTime
-        const progress = Math.min(Math.floor((elapsed / duration) * 100), 100)
-        this.reIdProgress[key] = progress
-
-        if (progress < 100) {
-          setTimeout(updateProgress, interval)
-        } else {
-          if (callback) callback()
-        }
-      }
-
-      updateProgress()
-    },
-    generateMockReIdResults () {
-      // 基于过滤结果生成重识别结果
-      this.reIdResults = this.filterResults.map(item => ({
-        id: item.id,
-        studentId: item.studentId,
-        cameraId: item.cameraId,
-        location: item.location,
-        timestamp: item.timestamp,
-        confidence: Math.floor(Math.random() * 30) + 70 // 70-99% 的置信度
-      }))
-
-      // 生成轨迹数据用于地图显示
-      this.generateTrajectoryData()
-    },
-    generateTrajectoryData () {
-      // 从重识别结果生成轨迹数据
-      this.trajectoryData = {
-        points: [],
-        cameras: []
-      }
-
-      // 添加摄像头位置
-      this.reIdResults.forEach(result => {
-        const camera = this.cameras.find(c => c.id === result.cameraId)
-        if (camera) {
-          this.trajectoryData.cameras.push({
-            id: camera.id,
-            name: camera.name,
-            position: camera.position,
-            timestamp: result.timestamp
-          })
-        }
-      })
-
-      // 根据摄像头位置生成轨迹点
-      for (let i = 0; i < this.trajectoryData.cameras.length; i++) {
-        const camera = this.trajectoryData.cameras[i]
-
-        // 添加摄像头所在位置
-        this.trajectoryData.points.push({
-          position: camera.position,
-          type: 'camera',
-          cameraId: camera.id
-        })
-
-        // 如果不是最后一个摄像头，添加到下一个摄像头的路径点
-        if (i < this.trajectoryData.cameras.length - 1) {
-          const nextCamera = this.trajectoryData.cameras[i + 1]
-          const startPos = camera.position
-          const endPos = nextCamera.position
-
-          // 生成几个中间点，模拟行走轨迹
-          const pointCount = Math.floor(Math.random() * 3) + 2
-          for (let j = 1; j <= pointCount; j++) {
-            const ratio = j / (pointCount + 1)
-            const lat = startPos[1] + (endPos[1] - startPos[1]) * ratio
-            const lng = startPos[0] + (endPos[0] - startPos[0]) * ratio
-
-            // 添加一点随机偏移，使路径看起来更自然
-            const offsetLat = (Math.random() - 0.5) * 0.0005
-            const offsetLng = (Math.random() - 0.5) * 0.0005
-
-            this.trajectoryData.points.push({
-              position: [lng + offsetLng, lat + offsetLat],
-              type: 'path'
-            })
-          }
-        }
-      }
-    },
-    handleCanPlay () {
-      const videoPlayer = this.$refs.videoPlayer
-      if (videoPlayer && videoPlayer.paused) {
-        videoPlayer.play().catch(e => {
-          console.log('视频播放失败:', e)
-          this.$message({
-            message: '请点击视频进行播放',
-            type: 'info'
-          })
-        })
-      }
-    },
     async startFiltering () {
-      if (!this.filterForm.studentId) {
-        this.$message.error('请输入学号')
+      if (!this.filterForm.studentId && this.filterForm.timeRange.length === 0 && this.filterForm.attributes.length === 0) {
+        this.$message.error('请至少输入一个过滤条件')
         return
       }
 
       this.isLoading = true
       this.$message({
-        message: '正在进行图像过滤...',
+        message: '正在进行数据过滤...',
         type: 'info'
       })
 
       try {
+        // 不使用 toISOString()，改为手动构建带有本地时区偏移的时间字符串
+        const formatLocalTime = (date) => {
+          return date.getFullYear() + '-' +
+         String(date.getMonth() + 1).padStart(2, '0') + '-' +
+         String(date.getDate()).padStart(2, '0') + 'T' +
+         String(date.getHours()).padStart(2, '0') + ':' +
+         String(date.getMinutes()).padStart(2, '0') + ':' +
+         String(date.getSeconds()).padStart(2, '0')
+        }
+
         // 准备请求参数
         const requestData = {
-          studentId: this.filterForm.studentId,
-          startTime: this.filterForm.timeRange[0],
-          endTime: this.filterForm.timeRange[1],
-          attributes: this.filterForm.attributes,
-          referenceImage: this.filterForm.referenceImage
+          studentId: this.filterForm.studentId || null,
+          startTime: this.filterForm.timeRange[0] ? formatLocalTime(new Date(this.filterForm.timeRange[0])) : null,
+          endTime: this.filterForm.timeRange[1] ? formatLocalTime(new Date(this.filterForm.timeRange[1])) : null,
+          attributes: {}
+        }
+
+        // 处理属性过滤
+        if (this.filterForm.attributes.includes('umbrella')) {
+          requestData.attributes.has_umbrella = true
+        }
+        if (this.filterForm.attributes.includes('backpack')) {
+          requestData.attributes.has_backpack = true
+        }
+        if (this.filterForm.attributes.includes('bicycle')) {
+          requestData.attributes.has_bicycle = true
+        }
+
+        // 如果有参考图片，添加到请求中
+        if (this.filterForm.referenceImage) {
+          requestData.referenceImage = this.filterForm.referenceImage
         }
 
         // 调用API
         const response = await filterRecords(requestData)
 
         if (response.data.status === 'success') {
-          this.filterResults = response.data.data
-
-          this.$message({
-            message: '过滤完成，找到 ' + this.filterResults.length + ' 条匹配记录',
-            type: 'success'
+          // 处理返回的过滤结果并确保按时间排序
+          this.filterResults = response.data.data.map(record => {
+            return {
+              id: record.id,
+              studentId: record.student_id,
+              cameraId: record.camera_id.toString(),
+              location: record.name || `摄像头${record.camera_id}`,
+              timestamp: record.timestamp,
+              matchedAttributes: this.getMatchedAttributes(record),
+              image: record.image_base64 || `https://picsum.photos/id/${record.id * 10}/300/200`
+            }
           })
+
+          // 确保按时间排序
+          this.filterResults.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+
+          if (this.filterResults.length > 0) {
+            this.$message.success(`找到 ${this.filterResults.length} 条匹配记录`)
+          } else {
+            this.$message.warning('未找到匹配记录')
+          }
         } else {
-          this.$message.error('过滤失败: ' + response.data.message)
+          this.$message.error(response.data.message || '过滤请求失败')
         }
       } catch (error) {
         console.error('过滤请求错误:', error)
         this.$message.error('过滤请求失败，请检查网络连接')
-
-        // 如果API尚未实现，使用模拟数据
-        this.generateMockFilterResults()
       } finally {
         this.isLoading = false
       }
+    },
+
+    // 辅助函数，从记录中获取匹配的属性
+    getMatchedAttributes (record) {
+      const attributes = []
+      if (record.has_umbrella) attributes.push('雨伞')
+      if (record.has_backpack) attributes.push('背包')
+      if (record.has_bicycle) attributes.push('自行车')
+      return attributes
     },
 
     async startReId () {
@@ -592,7 +487,7 @@ export default {
       try {
         // 先进行时空约束分析
         const spatioTempResponse = await analyzeSpacetimeConstraints({
-          records: this.filterResults
+          records: this.filterResults.map(item => item.id)
         })
 
         if (spatioTempResponse.data.status === 'success') {
@@ -606,11 +501,24 @@ export default {
           })
 
           if (reidResponse.data.status === 'success') {
-            this.reIdResults = reidResponse.data.reid_results
+            this.reIdProgress.featureMatching = 100
+            this.reIdProgress.crossCamera = 100
+
+            this.reIdResults = reidResponse.data.reid_results.map(item => ({
+              id: item.id,
+              studentId: item.student_id,
+              cameraId: item.camera_id.toString(),
+              location: this.getCameraLocation(item.camera_id.toString()),
+              timestamp: new Date(item.timestamp).toLocaleString(),
+              confidence: item.confidence || 85
+            }))
+
             this.recordIds = reidResponse.data.trajectory
 
             // 最后获取完整轨迹数据
             await this.loadTrajectoryData()
+
+            this.reIdProgress.trajectoryIntegration = 100
 
             this.$message({
               message: '重识别完成',
@@ -625,34 +533,29 @@ export default {
       } catch (error) {
         console.error('重识别请求错误:', error)
         this.$message.error('重识别请求失败，请检查网络连接')
-
-        // 如果API尚未实现，使用模拟数据
-        this.simulateProgress('spatialTemporal', 2000, () => {
-          this.simulateProgress('featureMatching', 1500, () => {
-            this.simulateProgress('crossCamera', 2500, () => {
-              this.simulateProgress('trajectoryIntegration', 1000, () => {
-                this.generateMockReIdResults()
-              })
-            })
-          })
-        })
       } finally {
         this.isLoading = false
       }
     },
+
+    getCameraLocation (cameraId) {
+      const camera = this.cameras.find(c => c.id === cameraId)
+      return camera ? camera.location : `摄像头${cameraId}`
+    },
+
     async loadTrajectoryData () {
       try {
-      // 获取轨迹数据
+        // 获取轨迹数据
         const response = await getTrajectory({
           recordIds: this.recordIds
         })
 
         if (response.data.status === 'success') {
-        // 处理轨迹数据，转换成地图组件所需格式
+          // 处理轨迹数据，转换成地图组件所需格式
           this.processTrajectoryData(
             response.data.trajectory_data,
             response.data.segments,
-            response.data.anomalies
+            response.data.anomalies || []
           )
         } else {
           this.$message.error('获取轨迹数据失败: ' + response.data.message)
@@ -660,14 +563,11 @@ export default {
       } catch (error) {
         console.error('获取轨迹数据错误:', error)
         this.$message.error('获取轨迹数据失败，请检查网络连接')
-
-        // 如果API尚未实现，使用模拟数据
-        this.generateTrajectoryData()
       }
     },
 
     processTrajectoryData (trajectoryData, segments, anomalies) {
-    // 从后端数据构建地图组件所需的轨迹数据格式
+      // 从后端数据构建地图组件所需的轨迹数据格式
       this.trajectoryData = {
         points: [],
         cameras: []
@@ -684,7 +584,7 @@ export default {
             this.trajectoryData.cameras.push({
               id: record.camera_id.toString(),
               name: cameraInfo.name,
-              position: [record.location_x, record.location_y],
+              position: [record.location_x || cameraInfo.position[0], record.location_y || cameraInfo.position[1]],
               timestamp: record.timestamp
             })
           }
@@ -693,7 +593,7 @@ export default {
 
       // 添加轨迹点
       this.trajectoryData.cameras.forEach(camera => {
-      // 添加摄像头点
+        // 添加摄像头点
         this.trajectoryData.points.push({
           position: camera.position,
           type: 'camera',
@@ -703,7 +603,7 @@ export default {
 
       // 添加路径段点
       segments.forEach(segment => {
-      // 添加起点和终点之间的路径点
+        // 添加起点和终点之间的路径点
         const startPos = segment.start_location
         const endPos = segment.end_location
 
@@ -727,7 +627,12 @@ export default {
 
       // 可以添加对异常点的特殊标记
       anomalies.forEach(anomaly => {
-      // 在此可以添加异常点的可视化
+        if (anomaly.location) {
+          this.trajectoryData.points.push({
+            position: [anomaly.location[0], anomaly.location[1]],
+            type: 'anomaly'
+          })
+        }
       })
     },
     handleCameraClick (cameraId) {
@@ -749,7 +654,6 @@ export default {
       // 确保视频元素已加载
       this.$nextTick(() => {
         if (this.$refs.videoPlayer) {
-          // 移除load()调用，避免中断play()请求
           this.$refs.videoPlayer.play().catch(e => {
             console.error('视频播放失败:', e)
             this.$message({
@@ -817,167 +721,129 @@ export default {
         }
         this.activeStep++
       } else {
-        // 完成
-        this.$message({
-          message: '轨迹可视化完成',
-          type: 'success'
-        })
+        // 如果是最后一步，可以执行完成操作
+        this.$message.success('轨迹可视化完成！')
       }
+    },
+    handleCanPlay () {
+      console.log('视频可以播放')
     }
   }
 }
 </script>
 
 <style scoped>
-@import "../static/css/mediaTracking.css";
-
 .container {
-  background: url("../assets/bg5.jpg") no-repeat center;
-  background-size: 100% 100%;
-  min-height: 100vh;
   padding: 20px;
-  display: flex;
-  flex-direction: column;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
 .title {
-  font-size: 2.5vw;
-  color: #5485c2;
+  font-size: 24px;
+  font-weight: bold;
   margin-bottom: 20px;
   text-align: center;
 }
 
 .steps-container {
-  width: 80%;
-  margin: 0 auto 30px;
+  margin-bottom: 30px;
 }
 
 .content {
   display: flex;
-  flex: 1;
-  margin-bottom: 30px;
+  margin-bottom: 20px;
+  gap: 20px;
 }
 
 .content-left {
-  flex: 3;
-  margin-right: 20px;
+  flex: 1;
 }
 
 .content-right {
   flex: 1;
 }
 
-.baidu-map {
-  width: 100%;
-  height: 70vh;
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-/* 添加滚动条样式 */
 .card {
-  margin-bottom: 20px;
-  overflow-y: auto; /* 垂直滚动条 */
-  max-height: 400px; /* 设置最大高度，超出时显示滚动条 */
-}
-
-.input-card, .reid-card {
-  height: 100%;
-  overflow-y: auto; /* 垂直滚动条 */
-}
-
-.filter-results, .reid-results, .track-info {
-  overflow-y: auto; /* 垂直滚动条 */
-  max-height: 300px; /* 设置最大高度 */
-}
-
-.timeline {
-  padding: 10px;
-  max-height: 400px; /* 设置最大高度 */
-  overflow-y: auto; /* 垂直滚动条 */
-}
-
-.video-player {
-  width: 100%;
-}
-
-.video-container {
-  width: 100%;
-  margin-bottom: 10px;
-  position: relative;
-  padding-top: 56.25%; /* 16:9 宽高比 */
-}
-
-.video-element {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
   height: 100%;
 }
 
-.video-info {
-  font-size: 14px;
-  color: #666;
-}
-
-.legend-item {
-  display: flex;
-  align-items: center;
-  margin-bottom: 5px;
-}
-
-.legend-color {
-  width: 15px;
-  height: 15px;
-  margin-right: 5px;
-  border-radius: 50%;
-}
-
-.nav-buttons {
-  margin-top: 20px;
-  text-align: center;
-}
-
-.upload-demo {
-  margin-top: 10px;
+.input-card {
+  height: 100%;
 }
 
 .reference-image {
-  width: 100px;
-  height: 100px;
+  width: 150px;
+  height: 150px;
   object-fit: cover;
   border-radius: 4px;
 }
 
-.no-results {
-  text-align: center;
-  color: #999;
+.filter-results {
+  padding: 10px;
+}
+
+.result-count {
+  margin-bottom: 10px;
+  font-weight: bold;
 }
 
 .result-item {
   display: flex;
+  flex-direction: column;
   align-items: center;
+  height: 100%;
 }
 
 .result-image {
-  width: 80px;
-  height: 80px;
+  max-height: 120px;
   object-fit: cover;
   border-radius: 4px;
-  margin-right: 10px;
-}
-
-.result-info {
-  flex: 1;
-}
-
-.progress-item {
   margin-bottom: 10px;
 }
 
+.result-info {
+  text-align: center;
+}
+
+.result-info p {
+  margin: 5px 0;
+}
+
+.no-results {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: #909399;
+}
+
+.no-results i {
+  font-size: 48px;
+  margin-bottom: 10px;
+}
+
+.nav-buttons {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+.reid-card {
+  height: 100%;
+}
+
+.reid-progress {
+  margin-bottom: 20px;
+}
+
+.progress-item {
+  margin-bottom: 15px;
+}
+
 .progress-label {
-  font-size: 14px;
+  display: block;
   margin-bottom: 5px;
 }
 
@@ -985,28 +851,70 @@ export default {
   margin-top: 20px;
 }
 
-.reid-progress {
-  margin-bottom: 20px;
+.reid-results {
+  padding: 10px;
 }
 
-.student-info {
-  font-size: 14px;
-  color: #333;
-}
-
-.trajectory-legend {
+.timeline {
   margin-top: 10px;
 }
 
-.trajectory-legend .legend-item {
-  margin-bottom: 0;
+.baidu-map {
+  width: 100%;
+  height: 500px;
+  border-radius: 4px;
+  overflow: hidden;
 }
 
-.trajectory-legend .legend-color {
-  width: 15px;
-  height: 15px;
-  margin-right: 5px;
-  border-radius: 50%;
+.track-info {
+  padding: 10px;
 }
 
+.student-info {
+  margin-bottom: 20px;
+}
+
+.student-info p {
+  margin: 10px 0;
+}
+
+.trajectory-legend {
+  border-top: 1px solid #EBEEF5;
+  padding-top: 15px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.legend-color {
+  width: 20px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 8px;
+}
+
+.video-player {
+  padding: 10px;
+}
+
+.video-container {
+  width: 100%;
+  margin-bottom: 15px;
+}
+
+.video-element {
+  width: 100%;
+  border-radius: 4px;
+}
+
+.video-info {
+  margin-top: 10px;
+}
+
+.video-info p {
+  margin: 5px 0;
+}
 </style>

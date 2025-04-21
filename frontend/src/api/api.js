@@ -63,7 +63,7 @@ export const stopDetection = () => {
 export const filterRecords = (data) => {
   return request({
     method: 'post',
-    url: '/api/filter',
+    url: '/filter',
     data: data
   })
 }
@@ -71,7 +71,7 @@ export const filterRecords = (data) => {
 export const analyzeSpacetimeConstraints = (data) => {
   return request({
     method: 'post',
-    url: '/api/spatiotemporal',
+    url: '/spatiotemporal',
     data: data
   })
 }
@@ -79,7 +79,7 @@ export const analyzeSpacetimeConstraints = (data) => {
 export const performReID = (data) => {
   return request({
     method: 'post',
-    url: '/api/reid',
+    url: '/reid',
     data: data
   })
 }
@@ -87,7 +87,7 @@ export const performReID = (data) => {
 export const getTrajectory = (data) => {
   return request({
     method: 'post',
-    url: '/api/trajectory',
+    url: '/trajectory',
     data: data
   })
 }

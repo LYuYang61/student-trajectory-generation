@@ -125,7 +125,7 @@ class DatabaseInterface:
                         return None
                 except Exception as e:
                     logger.warning(f"Failed to unpickle feature_vector: {e}")
-                    return None
+                    return None  # 失败时返回None而不是抛出异常
 
             # 处理特征数据
             if 'feature_vector' in df.columns:
