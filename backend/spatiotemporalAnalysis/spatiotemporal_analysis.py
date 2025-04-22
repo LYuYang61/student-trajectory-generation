@@ -25,14 +25,14 @@ class SpatiotemporalAnalysis:
         self.walking_speed = walking_speed  # 平均步行速度 (m/s)
 
     def calculate_travel_time(self,
-                              location1: Tuple[float, float],
-                              location2: Tuple[float, float]) -> float:
+                              location1: tuple,
+                              location2: tuple) -> float:
         """
         计算从一个位置到另一个位置的估计行走时间
 
         Args:
-            location1: 起始位置坐标 (x, y)
-            location2: 目标位置坐标 (x, y)
+            location1: 起始位置坐标 (longitude, latitude)
+            location2: 目标位置坐标 (longitude, latitude)
 
         Returns:
             估计的行走时间（秒）
@@ -40,92 +40,140 @@ class SpatiotemporalAnalysis:
         if self.campus_graph is not None:
             # 如果有校园地图图形，使用最短路径距离
             try:
-                closest_node1 = self._find_closest_node(location1)
-                closest_node2 = self._find_closest_node(location2)
-                path_length = nx.shortest_path_length(
-                    self.campus_graph,
-                    source=closest_node1,
-                    target=closest_node2,
-                    weight='distance'
-                )
-                return path_length / self.walking_speed
-            except (nx.NetworkXNoPath, nx.NodeNotFound):
-                # 如果找不到路径，回退到欧几里得距离
-                logger.warning(f"No path found between {location1} and {location2}, using Euclidean distance")
+                # 找到最近的节点
+                # 将方法名从 _find_nearest_node 改为 _find_closest_node
+                node1 = self._find_closest_node(location1)
+                node2 = self._find_closest_node(location2)
 
-        # 使用欧几里得距离
-        distance = euclidean(location1, location2)
-        return distance / self.walking_speed
+                # 计算最短路径距离
+                path = nx.shortest_path(self.campus_graph, node1, node2, weight='weight')
+                distance = 0
+                for i in range(len(path) - 1):
+                    distance += self.campus_graph[path[i]][path[i + 1]]['weight']
 
-    def _find_closest_node(self, location: Tuple[float, float]) -> str:
+                # 返回估计的行走时间
+                return distance / self.walking_speed
+
+            except (nx.NetworkXNoPath, nx.NodeNotFound, IndexError, ValueError) as e:
+                # 如果无法找到路径，使用后备方案
+                logging.warning(f"无法使用校园图计算距离: {str(e)}，使用后备距离计算")
+                return self._calculate_fallback_distance(location1, location2) / self.walking_speed
+
+        # 如果没有校园图，直接使用欧几里得距离
+        return self._calculate_fallback_distance(location1, location2) / self.walking_speed
+
+    def _calculate_fallback_distance(self, location1, location2):
+        """计算两点间的欧几里得距离（米）作为后备方案"""
+        # 将经纬度转换为近似米单位（简化计算）
+        lat1, lon1 = location1[1], location1[0]
+        lat2, lon2 = location2[1], location2[0]
+
+        # 使用 Haversine 公式计算地球表面两点间的距离
+        R = 6371000  # 地球半径（米）
+
+        # 将经纬度转换为弧度
+        lat1_rad = np.radians(lat1)
+        lat2_rad = np.radians(lat2)
+        delta_lat = np.radians(lat2 - lat1)
+        delta_lon = np.radians(lon2 - lon1)
+
+        # Haversine 公式
+        a = np.sin(delta_lat / 2) * np.sin(delta_lat / 2) + \
+            np.cos(lat1_rad) * np.cos(lat2_rad) * \
+            np.sin(delta_lon / 2) * np.sin(delta_lon / 2)
+        c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+        distance = R * c
+
+        return distance
+
+    def _find_closest_node(self, location: tuple) -> int:
         """
-        在图中找到最接近给定位置的节点
+        找到距离给定位置最近的图节点
 
         Args:
-            location: 位置坐标 (x, y)
+            location: 位置坐标 (longitude, latitude)
 
         Returns:
-            最接近的节点ID
+            最近节点的ID
         """
-        min_dist = float('inf')
+        min_distance = float('inf')
         closest_node = None
 
-        for node in self.campus_graph.nodes:
-            node_pos = self.campus_graph.nodes[node]['pos']
-            dist = euclidean(location, node_pos)
-            if dist < min_dist:
-                min_dist = dist
+        for node, data in self.campus_graph.nodes(data=True):
+            node_location = (data['longitude'], data['latitude'])
+            distance = self._calculate_fallback_distance(location, node_location)
+
+            if distance < min_distance:
+                min_distance = distance
                 closest_node = node
+
+        if closest_node is None:
+            raise ValueError("无法找到最近的节点")
 
         return closest_node
 
-    def filter_by_spatiotemporal_constraints(self,
-                                             records: pd.DataFrame,
-                                             time_threshold_multiplier: float = 1.5) -> pd.DataFrame:
-        """
-        使用时空约束过滤记录
-
-        Args:
-            records: 包含时间戳和位置的记录DataFrame
-            time_threshold_multiplier: 时间阈值乘数，考虑到可能的延迟
-
-        Returns:
-            时空合理的记录DataFrame
-        """
-        if records.empty or len(records) <= 1:
+    def filter_by_spatiotemporal_constraints(self, records):
+        """基于时空约束过滤记录"""
+        if records.empty:
             return records
 
-        if not all(col in records.columns for col in ['timestamp', 'location_x', 'location_y']):
-            logger.warning("Records missing required columns for spatiotemporal analysis")
-            return records
+        # 打印输入数据的列，确认name字段是否存在
+        logger.info(f"输入数据列: {records.columns.tolist()}")
+        logger.info(f"样例记录: {records.iloc[0].to_dict() if len(records) > 0 else '无记录'}")
 
-        # 确保按时间排序
-        sorted_records = records.sort_values(by='timestamp').reset_index(drop=True)
-        valid_indices = [0]  # 第一条记录总是有效的
+        # 先保存原始的摄像头ID和名称映射关系
+        camera_names = {}
+        if 'camera_id' in records.columns and 'name' in records.columns:
+            for _, row in records.iterrows():
+                if pd.notna(row['camera_id']) and pd.notna(row['name']):
+                    camera_names[row['camera_id']] = row['name']
+
+        logger.info(f"提取的摄像头名称映射: {camera_names}")
+
+        # 确保记录按时间排序
+        sorted_records = records.sort_values('timestamp').reset_index(drop=True)
+
+        # 记录时间戳和位置信息
+        timestamps = pd.to_datetime(sorted_records['timestamp'])
+        locations = sorted_records.apply(lambda row: (row['location_x'], row['location_y']), axis=1)
+
+        # 创建结果列表
+        result_indices = []
+
+        # 初始化第一个记录
+        result_indices.append(0)
+        prev_timestamp = timestamps.iloc[0]
+        prev_location = locations.iloc[0]
 
         for i in range(1, len(sorted_records)):
-            prev_idx = valid_indices[-1]
-            prev_record = sorted_records.iloc[prev_idx]
-            curr_record = sorted_records.iloc[i]
+            curr_timestamp = timestamps.iloc[i]
+            curr_location = locations.iloc[i]
 
             # 计算时间差（秒）
-            time_diff = (curr_record['timestamp'] - prev_record['timestamp']).total_seconds()
+            time_diff = (curr_timestamp - prev_timestamp).total_seconds()
 
-            # 获取位置坐标
-            prev_loc = (prev_record['location_x'], prev_record['location_y'])
-            curr_loc = (curr_record['location_x'], curr_record['location_y'])
+            # 计算最小所需时间
+            min_required_time = self.calculate_travel_time(prev_location, curr_location)
 
-            # 计算估计行走时间
-            estimated_travel_time = self.calculate_travel_time(prev_loc, curr_loc)
+            # 如果时间差大于等于最小所需时间，则该记录是有效的
+            if time_diff >= min_required_time:
+                result_indices.append(i)
+                prev_timestamp = curr_timestamp
+                prev_location = curr_location
 
-            # 检查时间差是否合理（考虑阈值乘数）
-            if time_diff >= estimated_travel_time / time_threshold_multiplier:
-                valid_indices.append(i)
-            else:
-                logger.info(f"Record at index {i} filtered out due to spatiotemporal constraint violation")
+        # 选择有效的记录 - 使用.copy()创建副本，确保不修改原始记录
+        filtered_records = sorted_records.iloc[result_indices].copy()
 
-        # 返回时空合理的记录
-        return sorted_records.iloc[valid_indices]
+        # 直接将名称重新应用到过滤后的记录中
+        if 'camera_id' in filtered_records.columns:
+            filtered_records['name'] = filtered_records['camera_id'].apply(
+                lambda x: camera_names.get(x, f"摄像头{x}")
+            )
+
+        logger.info(f"过滤后记录列: {filtered_records.columns.tolist()}")
+        logger.info(f"过滤后记录示例: {filtered_records.iloc[0].to_dict() if len(filtered_records) > 0 else '无记录'}")
+
+        return filtered_records
 
     def create_trajectory_graph(self, records: pd.DataFrame) -> nx.DiGraph:
         """

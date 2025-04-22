@@ -82,7 +82,7 @@ def filter_records():
         start_time_str = data.get('startTime')
         end_time_str = data.get('endTime')
         time_range = None
-
+        # 如果提供了时间范围，则解析
         if start_time_str and end_time_str:
             # 解析本地时间，添加东八区时区信息
             start_time = datetime.fromisoformat(start_time_str)
@@ -117,7 +117,7 @@ def filter_records():
                 'student_id': row.get('student_id', ''),
                 'camera_id': int(row.get('camera_id', 0)),
                 'timestamp': row.get('timestamp', '').strftime("%Y-%m-%d %H:%M:%S"),  # 格式化时间戳
-                'name': row.get('name', f"摄像头{row.get('camera_id', 0)}"),
+                'name': row.get('name', ''),
                 'has_backpack': bool(row.get('has_backpack', False)),
                 'has_umbrella': bool(row.get('has_umbrella', False)),
                 'has_bicycle': bool(row.get('has_bicycle', False))
@@ -133,17 +133,103 @@ def filter_records():
 @app.route('/spatiotemporal', methods=['POST'])
 def analyze_spatiotemporal():
     """进行时空约束分析"""
-    data = request.json
-    records = pd.DataFrame(data.get('records'))
+    try:
+        data = request.json
+        if not data or 'records' not in data:
+            return jsonify({'status': 'error', 'message': '缺少必要的记录数据'}), 400
 
-    # 调用时空约束分析
-    filtered_records = spatiotemporal_analyzer.filter_by_spatiotemporal_constraints(records)
+        # 将前端传来的记录转换为DataFrame
+        records_data = data.get('records', [])
+        if not records_data:
+            return jsonify({'status': 'success', 'data': []}), 200
 
-    # 返回时空约束过滤后的结果
-    return jsonify({
-        'status': 'success',
-        'data': filtered_records.to_dict('records')
-    })
+        # 转换为DataFrame并处理时间戳
+        records_df = pd.DataFrame(records_data)
+
+        # 输出原始数据结构，用于调试
+        logger.info(f"前端传入的记录结构: {records_df.columns.tolist()}")
+        logger.info(f"前端传入的记录样例: {records_df.iloc[0].to_dict() if len(records_df) > 0 else '无记录'}")
+
+        if 'timestamp' in records_df.columns:
+            records_df['timestamp'] = pd.to_datetime(records_df['timestamp'])
+
+        # 确保包含位置信息
+        if not all(col in records_df.columns for col in ['location_x', 'location_y']):
+            # 尝试通过camera_id获取位置信息
+            if 'camera_id' in records_df.columns:
+                cameras = db_interface.get_camera_locations()
+                records_df = pd.merge(
+                    records_df,
+                    cameras[['camera_id', 'location_x', 'location_y', 'name']],
+                    on='camera_id',
+                    how='left',
+                    suffixes=('', '_camera')  # 避免使用_x和_y后缀
+                )
+
+                # 如果原始数据没有name列，则使用摄像头的name
+                if 'name' not in records_df.columns and 'name_camera' in records_df.columns:
+                    records_df['name'] = records_df['name_camera']
+                    records_df.drop('name_camera', axis=1, inplace=True, errors='ignore')
+
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': '记录缺少位置信息或摄像头ID'
+                }), 400
+
+        # 调用时空约束分析
+        filtered_records = spatiotemporal_analyzer.filter_by_spatiotemporal_constraints(records_df)
+
+        # 如果过滤后记录没有name字段，尝试重新关联摄像头信息
+        if 'camera_id' in filtered_records.columns and (
+                'name' not in filtered_records.columns or filtered_records['name'].isnull().any()):
+            cameras = db_interface.get_camera_locations()
+            camera_dict = cameras.set_index('camera_id')['name'].to_dict()
+
+            # 直接应用camera_id对应的name，而不是使用merge
+            filtered_records['name'] = filtered_records['camera_id'].apply(
+                lambda x: camera_dict.get(x, f"摄像头{x}")
+            )
+
+            # 清理多余列
+            for col in filtered_records.columns:
+                if col.endswith('_x') or col.endswith('_y'):
+                    filtered_records.drop(col, axis=1, inplace=True, errors='ignore')
+
+            logger.info("重新关联摄像头名称信息")
+
+        # 将结果转换为JSON友好的格式
+        result = []
+        for _, row in filtered_records.iterrows():
+            # 确保所有字段都存在，提供默认值
+            record = {
+                'id': int(row.get('id', 0)),
+                'student_id': row.get('student_id', ''),
+                'camera_id': int(row.get('camera_id', 0)),
+                'timestamp': row.get('timestamp', '').strftime("%Y-%m-%d %H:%M:%S"),
+                'name': str(row.get('name', f"摄像头{row.get('camera_id', 0)}")),  # 确保名称是字符串
+                'has_backpack': bool(row.get('has_backpack', False)),
+                'has_umbrella': bool(row.get('has_umbrella', False)),
+                'has_bicycle': bool(row.get('has_bicycle', False)),
+                'location_x': float(row.get('location_x', 0.0)),
+                'location_y': float(row.get('location_y', 0.0))
+            }
+            result.append(record)
+
+        # 输出处理后的结果样例，用于调试
+        logger.info(f"返回的结果数量: {len(result)}")
+        if result:
+            logger.info(f"结果样例: {result[0]}")
+
+        # 返回时空约束过滤后的结果
+        return jsonify({
+            'status': 'success',
+            'data': result
+        })
+
+    except Exception as e:
+        logger.error(f"时空约束分析错误: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/reid', methods=['POST'])

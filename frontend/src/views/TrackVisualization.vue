@@ -434,10 +434,13 @@ export default {
               id: record.id,
               studentId: record.student_id,
               cameraId: record.camera_id.toString(),
-              location: record.name || `摄像头${record.camera_id}`,
+              name: record.name || `摄像头${record.camera_id}`,
               timestamp: record.timestamp,
               matchedAttributes: this.getMatchedAttributes(record),
-              image: record.image_base64 || `https://picsum.photos/id/${record.id * 10}/300/200`
+              image: record.image_base64 || `https://picsum.photos/id/${record.id * 10}/300/200`,
+              has_backpack: record.has_backpack,
+              has_umbrella: record.has_umbrella,
+              has_bicycle: record.has_bicycle
             }
           })
 
@@ -480,59 +483,99 @@ export default {
 
       this.isLoading = true
       this.$message({
-        message: '正在执行重识别...',
+        message: '开始进行时空约束分析...',
         type: 'info'
       })
 
       try {
-        // 先进行时空约束分析
-        const spatioTempResponse = await analyzeSpacetimeConstraints({
-          records: this.filterResults.map(item => item.id)
-        })
+        // 第一步：时空约束分析
+        // 准备请求数据 - 确保包含camera_id字段
+        const spatiotemporalRequestData = {
+          records: this.filterResults.map(record => {
+            const cameraId = parseInt(record.cameraId)
+            return {
+              id: record.id,
+              student_id: record.studentId || null,
+              // 确保camera_id是有效的数字
+              camera_id: isNaN(cameraId) ? null : cameraId,
+              timestamp: record.timestamp,
+              name: record.name || null,
+              has_backpack: record.has_backpack,
+              has_umbrella: record.has_umbrella,
+              has_bicycle: record.has_bicycle
+            }
+          })
+        }
 
-        if (spatioTempResponse.data.status === 'success') {
-          this.reIdProgress.spatialTemporal = 100
+        console.log('发送到时空约束分析的数据:', spatiotemporalRequestData)
 
-          // 再执行ReID
-          const reidResponse = await performReID({
-            records: spatioTempResponse.data.data,
-            algorithm: this.reIdOptions.algorithm,
-            threshold: this.reIdOptions.threshold
+        // 确保所有数据都有有效的camera_id
+        if (spatiotemporalRequestData.records.some(r => r.camera_id === null)) {
+          this.$message.warning('部分记录缺少有效的摄像头ID，这可能影响分析结果')
+        }
+
+        // 调用时空约束分析API
+        const spatiotemporalResponse = await analyzeSpacetimeConstraints(spatiotemporalRequestData)
+
+        if (spatiotemporalResponse.data.status === 'success') {
+          // 更新过滤结果为时空约束过滤后的结果
+          this.filterResults = spatiotemporalResponse.data.data.map(record => {
+            return {
+              id: record.id,
+              student_id: record.student_id,
+              camera_id: parseInt(record.camera_id),
+              timestamp: record.timestamp,
+              name: record.name,
+              has_backpack: record.has_backpack,
+              has_umbrella: record.has_umbrella,
+              has_bicycle: record.has_bicycle,
+              location_x: record.location_x,
+              location_y: record.location_y
+            }
           })
 
+          console.log('时空约束分析后的结果:', this.filterResults)
+
+          // 更新时空约束分析进度
+          this.reIdProgress.spatialTemporal = 100
+          this.$message.success(`时空约束分析完成，保留 ${this.filterResults.length} 条有效记录`)
+
+          // 完成第一阶段后，继续执行ReID处理的其他步骤
+
+          // 第二步：准备重识别数据
+          const reidRequestData = {
+            records: this.filterResults,
+            algorithm: this.reIdForm.algorithm,
+            threshold: this.reIdForm.threshold
+          }
+
+          // 执行重识别处理
+          const reidResponse = await performReID(reidRequestData)
+
           if (reidResponse.data.status === 'success') {
-            this.reIdProgress.featureMatching = 100
+            // 更新重识别结果
+            this.reIdResults = reidResponse.data.reid_results
+            this.trajectoryRecordIds = reidResponse.data.trajectory
+
+            // 自动更新进度
             this.reIdProgress.crossCamera = 100
-
-            this.reIdResults = reidResponse.data.reid_results.map(item => ({
-              id: item.id,
-              studentId: item.student_id,
-              cameraId: item.camera_id.toString(),
-              location: this.getCameraLocation(item.camera_id.toString()),
-              timestamp: new Date(item.timestamp).toLocaleString(),
-              confidence: item.confidence || 85
-            }))
-
-            this.recordIds = reidResponse.data.trajectory
-
-            // 最后获取完整轨迹数据
-            await this.loadTrajectoryData()
-
+            this.reIdProgress.featureMatching = 100
             this.reIdProgress.trajectoryIntegration = 100
 
-            this.$message({
-              message: '重识别完成',
-              type: 'success'
-            })
+            if (this.reIdResults.length > 0) {
+              this.$message.success(`重识别处理完成，识别出 ${this.reIdResults.length} 条记录`)
+            } else {
+              this.$message.warning('重识别处理完成，但未找到匹配记录')
+            }
           } else {
-            this.$message.error('重识别失败: ' + reidResponse.data.message)
+            this.$message.error(reidResponse.data.message || '重识别处理失败')
           }
         } else {
-          this.$message.error('时空约束分析失败: ' + spatioTempResponse.data.message)
+          this.$message.error(spatiotemporalResponse.data.message || '时空约束分析失败')
         }
       } catch (error) {
-        console.error('重识别请求错误:', error)
-        this.$message.error('重识别请求失败，请检查网络连接')
+        console.error('时空约束和重识别处理错误:', error)
+        this.$message.error('处理请求失败，请检查网络连接')
       } finally {
         this.isLoading = false
       }

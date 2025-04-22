@@ -4,8 +4,8 @@ CREATE TABLE student_records (
     student_id VARCHAR(50), -- 学生学号
     camera_id INTEGER, -- 摄像头ID
     timestamp DATETIME, -- 时间戳
-    location_x FLOAT, -- X坐标
-    location_y FLOAT, -- Y坐标
+    location_x DOUBLE(9, 6), -- X坐标
+    location_y DOUBLE(9, 6), -- Y坐标
     has_backpack BOOLEAN, -- 是否背包
     has_umbrella BOOLEAN, -- 是否带雨伞
     has_bicycle BOOLEAN, -- 是否骑自行车
@@ -16,8 +16,8 @@ CREATE TABLE student_records (
 -- 创建 `cameras` 表，用于存储摄像头位置信息
 CREATE TABLE cameras (
     camera_id INTEGER PRIMARY KEY, -- 摄像头ID
-    location_x FLOAT, -- X坐标
-    location_y FLOAT, -- Y坐标
+    location_x DOUBLE(9, 6), -- X坐标
+    location_y DOUBLE(9, 6), -- Y坐标
     name VARCHAR(100) -- 摄像头名称
 );
 
