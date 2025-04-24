@@ -4,6 +4,10 @@ from importlib import import_module
 import torch
 import torch.nn as nn
 
+import sys
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 class Model(nn.Module):
     def __init__(self, args, ckpt):
         super(Model, self).__init__()
@@ -15,7 +19,7 @@ class Model(nn.Module):
 
         print("module:"+'MGN.model.' + args.model.lower())
 
-        module = import_module('MGN.model.' + args.model.lower())
+        module = import_module('.model.' + args.model.lower(), package='backend.resources.models.mgn')
         self.model = module.make_model(args).to(self.device)
 
         if not args.cpu and args.nGPU > 1:

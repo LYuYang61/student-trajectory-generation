@@ -224,6 +224,49 @@ class DatabaseInterface:
             logger.error(f"Error retrieving video path: {e}")
             raise
 
+    def execute_query(self, query: str, params=None) -> List[Dict[str, Any]]:
+        """
+        执行SQL查询并返回结果列表
+
+        Args:
+            query: SQL查询语句
+            params: 查询参数
+
+        Returns:
+            查询结果的字典列表
+        """
+        try:
+            cursor = self.conn.cursor()
+
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+
+            # 获取列名
+            if self.db_config['type'].lower() == 'sqlite':
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            else:  # MySQL
+                columns = [desc[0] for desc in cursor.description] if cursor.description else []
+
+            # 获取结果并转换为字典列表
+            results = cursor.fetchall()
+            result_dicts = []
+
+            for row in results:
+                result_dict = {}
+                for i, col_name in enumerate(columns):
+                    result_dict[col_name] = row[i]
+                result_dicts.append(result_dict)
+
+            cursor.close()
+            logger.info(f"查询执行成功，返回 {len(result_dicts)} 条结果")
+            return result_dicts
+
+        except Exception as e:
+            logger.error(f"执行查询时发生错误: {e}")
+            raise
+
     def update_student_id(self, record_id: int, student_id: str) -> bool:
         """
         更新记录的学号信息

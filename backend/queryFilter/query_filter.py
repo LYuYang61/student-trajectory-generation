@@ -60,6 +60,42 @@ class QueryFilter:
         logger.info(f"Initial filter returned {len(records)} records")
         return records
 
+    def get_records_by_ids(self, record_ids: List[int]) -> pd.DataFrame:
+        """
+        根据记录ID列表获取详细记录
+
+        Args:
+            record_ids: 记录ID列表
+
+        Returns:
+            包含指定ID记录的DataFrame
+        """
+        if not record_ids:
+            return pd.DataFrame()
+
+        try:
+            # 将ID列表转换为逗号分隔的字符串
+            id_str = ','.join(map(str, record_ids))
+
+            # 构建SQL查询
+            query = f"""
+            SELECT * FROM student_appearances
+            WHERE id IN ({id_str})
+            """
+
+            # 查询数据库
+            records = self.db.execute_query(query)
+            logger.info(f"查询到 {len(records)} 条记录，通过IDs: {id_str}")
+
+            # 增强结果
+            enhanced_records = self.enhance_filter_results(records)
+
+            return enhanced_records
+
+        except Exception as e:
+            logger.error(f"通过ID获取记录失败: {str(e)}")
+            return pd.DataFrame()
+
     def filter_by_appearance(self,
                              records: pd.DataFrame,
                              has_bicycle: Optional[bool] = None,

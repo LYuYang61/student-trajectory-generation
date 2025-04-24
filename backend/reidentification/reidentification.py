@@ -1,652 +1,918 @@
-import pandas as pd
-import time
+import os
 import numpy as np
 import cv2
-import os
 import torch
-from sqlalchemy import create_engine, text
-from tqdm import tqdm
 from PIL import Image
 from torchvision import transforms
-from torch.nn import functional as F
+import sys
+import logging
+import datetime
+from datetime import datetime, timedelta, time
+import pandas as pd
+
+# 配置全局日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 
 class ReIDProcessor:
-    def __init__(self, db_url='mysql+pymysql://root:123456@localhost/trajectory',
-                 models_path="D:/lyycode02/student-trajectory-generation/backend/resources/models", device=None):
+    def __init__(self, db_interface=None):
         """
         初始化重识别处理器
 
         Args:
-            db_url: 数据库连接URL
-            models_path: 模型文件存放路径
-            device: 运行设备，默认为自动选择GPU或CPU
+            db_interface: 数据库接口实例，用于查询视频和摄像头信息
         """
-        self.db_engine = create_engine(db_url)
-        self.models_path = models_path
-        self.device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"使用设备: {self.device}")
-
-        # 初始化变换
+        logger.info("初始化 ReIDProcessor")
+        self.models = {}
         self.transform = transforms.Compose([
-            transforms.Resize((256, 128)),
+            transforms.Resize((384, 128)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+        self.db_interface = db_interface
+        logger.info("ReIDProcessor 初始化完成，图像转换器已设置")
 
-        # 各种ReID模型
-        self.models = {
-            'osnet': self._init_osnet_model(),
-            'mgn': self._init_mgn_model(),
-            'transformer': self._init_transformer_model()
-        }
+    def _load_model(self, algorithm):
+        """加载指定的重识别模型"""
+        logger.info(f"尝试加载 {algorithm} 模型")
 
-        # 当前选择的模型
-        self.current_model = None
-        self.model_name = None
+        if algorithm in self.models:
+            logger.info(f"{algorithm} 模型已加载，直接返回缓存模型")
+            return self.models[algorithm]
 
-    def _init_osnet_model(self):
-        """初始化OSNet模型"""
         try:
-            from torchreid.reid.models import build_model
+            if algorithm == 'osnet':
+                logger.info("开始加载 OSNet 模型")
+                # 实现OSNet模型加载
+                from torchreid.reid.models.osnet import osnet_x1_0
+                model = osnet_x1_0(name='osnet', num_classes=751)
+                model_path = os.path.join(os.path.dirname(__file__), '../resources/models/osnet_x1_0.pth')
+                logger.info(f"OSNet 模型路径: {model_path}")
 
-            print("初始化OSNet模型...")
-            model_path = os.path.join(self.models_path, 'osnet_x1_0_market.pth')
+                logger.info("正在加载 OSNet 模型权重")
+                model.load_state_dict(torch.load(model_path, map_location='cpu'))
+                model.eval()
+                self.models[algorithm] = model
+                logger.info("OSNet 模型加载成功并设置为评估模式")
+                return model
 
-            # 检查模型文件是否存在
-            if not os.path.exists(model_path):
-                print(f"警告: 模型文件不存在: {model_path}")
-                return None
+            elif algorithm == 'mgn':
+                logger.info("开始加载 MGN 模型")
+                # 添加项目根目录到搜索路径
+                sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+                logger.info(f"添加路径: {os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))}")
 
-            # 构建OSNet模型
-            model = build_model(
-                name='osnet_x1_0',
-                num_classes=751,  # Market-1501数据集类别数
-                pretrained=False
-            )
+                # 直接导入MGN类
+                from backend.resources.models.mgn.mgn import MGN
 
-            # 加载预训练权重
-            checkpoint = torch.load(model_path, map_location=self.device)
-            model.load_state_dict(checkpoint)
-            model.to(self.device)
-            model.eval()
+                # 初始化模型参数
+                class Args:
+                    def __init__(self):
+                        self.num_classes = 751
+                        self.feats = 256
+                        self.pool = 'max'
 
-            print("OSNet模型加载成功")
-            return model
+                args = Args()
+                logger.info("正在初始化 MGN 模型")
+                model = MGN(args)
+
+                # 加载权重
+                model_path = os.path.join(os.path.dirname(__file__),
+                                          '../resources/models/mgn/model_best.pt')
+                logger.info(f"MGN模型路径: {model_path}")
+
+                if os.path.exists(model_path):
+                    model.load_state_dict(torch.load(model_path, map_location='cpu'))
+                    logger.info("MGN模型权重加载成功")
+                else:
+                    logger.warning(f"MGN模型权重文件不存在: {model_path}")
+
+                model.eval()
+                self.models[algorithm] = model
+                logger.info("MGN模型加载成功并设置为评估模式")
+                return model
+
+            elif algorithm == 'transformer':
+                logger.info("开始加载 TransReID 模型")
+                # 实现TransReID模型加载
+                from backend.resources.models.transreid import build_transformer_model
+                logger.info("正在构建 TransReID 模型结构")
+                model = build_transformer_model()
+                model_path = os.path.join(os.path.dirname(__file__), '../resources/models/transreid.pth')
+                logger.info(f"TransReID 模型路径: {model_path}")
+
+                logger.info("正在加载 TransReID 模型权重")
+                model.load_state_dict(torch.load(model_path, map_location='cpu'))
+                model.eval()
+                self.models[algorithm] = model
+                logger.info("TransReID 模型加载成功并设置为评估模式")
+                return model
+
+            else:
+                logger.error(f"不支持的算法: {algorithm}")
+                raise ValueError(f"不支持的算法: {algorithm}")
 
         except Exception as e:
-            print(f"OSNet模型初始化失败: {e}")
-            return None
+            logger.error(f"加载 {algorithm} 模型失败: {str(e)}", exc_info=True)
+            raise
 
-    def _init_mgn_model(self):
-        """初始化MGN模型"""
+    def _extract_feature_vector(self, image_data, algorithm='mgn'):
+        """从图像中提取特征向量"""
+        logger.info(f"开始使用 {algorithm} 算法提取特征向量")
         try:
-            # 导入MGN模型所需的类和函数
-            import sys
-            sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            from backend.resources.models.mgn import Model
-            from backend.resources.models.mgn.mgn import make_model
+            # 加载模型
+            model = self._load_model(algorithm)
 
-            print("初始化MGN模型...")
-
-            # 使用相对路径，更具可移植性
-            model_path = os.path.join(self.models_path, 'mgn')
-
-            # 检查模型目录是否存在
-            if not os.path.exists(model_path):
-                print(f"警告: 模型目录不存在: {model_path}")
+            # 预处理图像
+            if isinstance(image_data, np.ndarray):
+                image = Image.fromarray(cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB))
+            else:
+                logger.error("不支持的图像数据格式")
                 return None
 
-            # 创建一个类似于args的对象，包含MGN模型所需的参数
-            class Args:
-                def __init__(self):
-                    self.model = 'MGN'
-                    self.num_classes = 751  # Market-1501数据集类别数
-                    self.feats = 256  # 特征维度
-                    self.pool = 'avg'  # 池化方式
-                    self.cpu = self.device == 'cpu'
-                    self.nGPU = 0 if self.cpu else 1
-                    self.save_models = False
-                    self.pre_train = ''
-                    self.resume = -1
-
-            # 创建ckpt对象
-            class Ckpt:
-                def __init__(self):
-                    self.dir = model_path
-
-            args = Args()
-            ckpt = Ckpt()
-
-            # 构建MGN模型
-            model = Model(args, ckpt)
-            model.eval()
-
-            print("MGN模型加载成功")
-            return model
-
-        except Exception as e:
-            print(f"MGN模型初始化失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
-    def _init_transformer_model(self):
-        """初始化TransformerReID模型"""
-        try:
-            from backend.resources import models
-
-            print("初始化TransformerReID模型...")
-            model_path = os.path.join(self.models_path, 'transformer_reid_market.pth')
-
-            # 检查模型文件是否存在
-            if not os.path.exists(model_path):
-                print(f"警告: 模型文件不存在: {model_path}")
-                return None
-
-            # 构建TransformerReID模型
-            model = models(num_classes=751)  # Market-1501数据集类别数
-
-            # 加载预训练权重
-            checkpoint = torch.load(model_path, map_location=self.device)
-            model.load_state_dict(checkpoint)
-            model.to(self.device)
-            model.eval()
-
-            print("TransformerReID模型加载成功")
-            return model
-
-        except Exception as e:
-            print(f"TransformerReID模型初始化失败: {e}")
-            return None
-
-    def set_model(self, algorithm='mgn'):
-        """
-        设置要使用的重识别模型
-
-        Args:
-            algorithm: 模型名称，可选值：'osnet', 'mgn', 'transformer'
-
-        Returns:
-            bool: 是否成功设置模型
-        """
-        if algorithm not in self.models:
-            print(f"错误: 不支持的算法 '{algorithm}'")
-            return False
-
-        if self.models[algorithm] is None:
-            print(f"错误: 模型 '{algorithm}' 未能正确加载")
-            return False
-
-        self.current_model = self.models[algorithm]
-        self.model_name = algorithm
-        print(f"已设置模型: {algorithm}")
-        return True
-
-    def extract_feature(self, img_path):
-        """
-        从图像中提取特征向量
-
-        Args:
-            img_path: 图像路径
-
-        Returns:
-            torch.Tensor: 特征向量
-        """
-        if self.current_model is None:
-            print("错误: 未设置模型")
-            return None
-
-        try:
-            # 加载图像
-            img = Image.open(img_path).convert('RGB')
-            img_tensor = self.transform(img).unsqueeze(0).to(self.device)
+            # 转换图像
+            image_tensor = self.transform(image).unsqueeze(0)
 
             # 提取特征
             with torch.no_grad():
-                if self.model_name == 'mgn':
-                    # MGN模型特殊处理
-                    _, _, features = self.current_model(img_tensor)
-                    feature = torch.cat(features, dim=1)
+                if algorithm == 'osnet':
+                    features = model(image_tensor)
+                    feature_vector = features.cpu().numpy()[0]
+                elif algorithm == 'mgn':
+                    features, *_ = model(image_tensor)
+                    feature_vector = features.cpu().numpy()[0]
+                    # 确保特征向量维度是2048
+                    if len(feature_vector) != 2048:
+                        logger.warning(f"MGN特征向量维度为{len(feature_vector)}，调整为2048")
+                        if len(feature_vector) < 2048:
+                            # 填充
+                            padded = np.zeros(2048)
+                            padded[:len(feature_vector)] = feature_vector
+                            feature_vector = padded
+                        else:
+                            # 截断
+                            feature_vector = feature_vector[:2048]
                 else:
-                    # 其他模型通用处理
-                    feature = self.current_model(img_tensor)
+                    # 其他模型处理...
+                    pass
 
-                # 归一化特征向量
-                feature = F.normalize(feature, p=2, dim=1)
-
-            return feature.cpu()
+            logger.info(f"特征提取完成，维度: {len(feature_vector)}")
+            return feature_vector
 
         except Exception as e:
-            print(f"特征提取失败: {e}")
+            logger.error(f"特征提取失败: {str(e)}", exc_info=True)
             return None
 
-    def calculate_similarity(self, feature1, feature2):
+    def _get_video_paths(self, records):
         """
-        计算两个特征向量之间的相似度
+        根据记录信息获取对应的视频路径
 
         Args:
-            feature1: 第一个特征向量
-            feature2: 第二个特征向量
+            records: 包含时间和摄像头ID的记录列表
 
         Returns:
-            float: 相似度得分 (0-1)
+            带有视频路径的记录列表
         """
-        # 使用余弦相似度
-        similarity = torch.cosine_similarity(feature1, feature2).item()
-        return max(0, similarity)  # 确保相似度在0-1之间
+        logger.info("开始获取视频路径")
 
-    def extract_frames_from_video(self, video_path, start_time=None, end_time=None, interval=1):
+        # 导入时间类
+        from datetime import time as datetime_time
+
+        if not self.db_interface:
+            logger.warning("数据库接口未初始化，无法获取视频路径")
+            return records
+
+        for record in records:
+            # 跳过查询记录，因为它已经有图像数据
+            if record.get('id') == 'query':
+                logger.info("跳过查询记录的视频路径获取")
+                continue
+
+            try:
+                camera_id = record.get('camera_id')
+                timestamp_str = record.get('timestamp')
+
+                if not camera_id or not timestamp_str:
+                    logger.warning(f"记录缺少摄像头ID或时间戳: {record}")
+                    continue
+
+                # 解析时间戳
+                if isinstance(timestamp_str, str):
+                    timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                else:
+                    timestamp = timestamp_str
+
+                date = timestamp.date()
+                time = timestamp.time()
+
+                # 查询视频信息
+                query = f"""
+                SELECT video_path, start_time, end_time
+                FROM camera_videos
+                WHERE camera_id = {camera_id}
+                  AND date = '{date}'
+                  AND start_time <= '{time}'
+                  AND end_time >= '{time}'
+                """
+                logger.info(f"执行SQL查询: {query}")
+
+                # 执行查询
+                video_info = self.db_interface.execute_query(query)
+
+                if video_info and len(video_info) > 0:
+                    video_path = video_info[0]['video_path']
+                    start_time = video_info[0]['start_time']
+                    end_time = video_info[0]['end_time']
+
+                    logger.info(f"找到视频路径: {video_path}, 开始时间: {start_time}, 结束时间: {end_time}")
+
+                    record['video_path'] = video_path
+
+                    # 确保 start_time 和 end_time 是 datetime.time 类型
+                    if isinstance(start_time, timedelta):
+                        # 转换 timedelta 为 time 类型
+                        seconds = start_time.total_seconds()
+                        hours = int(seconds // 3600)
+                        minutes = int((seconds % 3600) // 60)
+                        seconds = int(seconds % 60)
+                        start_time_obj = datetime_time(hours, minutes, seconds)
+                    elif not isinstance(start_time, datetime_time):
+                        # 尝试将字符串转换为 time 对象
+                        try:
+                            if isinstance(start_time, str):
+                                start_time_obj = datetime.strptime(start_time, "%H:%M:%S").time()
+                            else:
+                                start_time_obj = datetime_time(0, 0, 0)  # 默认值
+                        except Exception as e:
+                            logger.warning(f"无法解析开始时间: {e}")
+                            start_time_obj = datetime_time(0, 0, 0)  # 默认值
+                    else:
+                        start_time_obj = start_time
+
+                    if isinstance(end_time, timedelta):
+                        # 转换 timedelta 为 time 类型
+                        seconds = end_time.total_seconds()
+                        hours = int(seconds // 3600)
+                        minutes = int((seconds % 3600) // 60)
+                        seconds = int(seconds % 60)
+                        end_time_obj = datetime_time(hours, minutes, seconds)
+                    elif not isinstance(end_time, datetime_time):
+                        # 尝试将字符串转换为 time 对象
+                        try:
+                            if isinstance(end_time, str):
+                                end_time_obj = datetime.strptime(end_time, "%H:%M:%S").time()
+                            else:
+                                end_time_obj = datetime_time(23, 59, 59)  # 默认值
+                        except Exception as e:
+                            logger.warning(f"无法解析结束时间: {e}")
+                            end_time_obj = datetime_time(23, 59, 59)  # 默认值
+                    else:
+                        end_time_obj = end_time
+
+                    # 现在使用正确类型的时间对象来组合
+                    record['video_start_time'] = datetime.combine(date, start_time_obj).strftime("%Y-%m-%d %H:%M:%S")
+                    record['video_end_time'] = datetime.combine(date, end_time_obj).strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    logger.warning(f"未找到对应的视频: 摄像头ID={camera_id}, 日期={date}, 时间={time}")
+                    record['video_path'] = ""
+                    record['video_start_time'] = timestamp_str
+                    record['video_end_time'] = timestamp_str
+
+            except Exception as e:
+                logger.error(f"获取视频路径时发生错误: {str(e)}", exc_info=True)
+                record['video_path'] = ""
+                record['video_start_time'] = timestamp_str if isinstance(timestamp_str,
+                                                                         str) else timestamp_str.strftime(
+                    "%Y-%m-%d %H:%M:%S")
+                record['video_end_time'] = timestamp_str if isinstance(timestamp_str, str) else timestamp_str.strftime(
+                    "%Y-%m-%d %H:%M:%S")
+
+        logger.info("视频路径获取完成")
+        return records
+
+    def _extract_frames_from_video(self, video_path, timestamp_str, window_seconds=10):
         """
-        从视频中提取行人帧
+        从视频中提取指定时间点附近的帧
 
         Args:
-            video_path: 视频路径
-            start_time: 开始时间（秒）
-            end_time: 结束时间（秒）
-            interval: 提取帧的间隔（秒）
+            video_path: 视频文件路径
+            timestamp_str: 时间戳字符串
+            window_seconds: 时间窗口大小（秒）
 
         Returns:
-            list: 提取的帧图像列表
+            提取的帧列表
         """
+        logger.info(f"开始从视频中提取帧: {video_path}, 时间点: {timestamp_str}")
+
         if not os.path.exists(video_path):
-            print(f"错误: 视频文件不存在: {video_path}")
+            logger.error(f"视频文件不存在: {video_path}")
             return []
 
         try:
-            # 打开视频
+            # 解析时间戳
+            if isinstance(timestamp_str, str):
+                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+            else:
+                timestamp = timestamp_str
+
+            # 打开视频文件
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
-                print(f"错误: 无法打开视频: {video_path}")
+                logger.error(f"无法打开视频文件: {video_path}")
                 return []
 
             # 获取视频信息
             fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration = total_frames / fps
+            video_duration = total_frames / fps  # 视频总时长（秒）
 
-            # 设置开始和结束帧
-            start_frame = 0
-            if start_time is not None:
-                start_frame = int(start_time * fps)
+            logger.info(f"视频信息: FPS={fps}, 总帧数={total_frames}, 时长={video_duration}秒")
 
-            end_frame = total_frames
-            if end_time is not None:
-                end_frame = min(int(end_time * fps), total_frames)
+            # 提取视频文件名中的日期和时间信息（假设格式为 camera_X_YYYY-MM-DD_HH-MM-SS.mp4）
+            video_filename = os.path.basename(video_path)
+            video_timestamp = None
 
-            # 设置提取帧的间隔
-            frame_interval = int(interval * fps)
+            # 尝试从文件名解析时间
+            try:
+                parts = video_filename.split('_')
+                date_part = parts[-2]
+                time_part = parts[-1].split('.')[0]
+
+                date_obj = datetime.strptime(date_part, "%Y-%m-%d")
+                time_obj = datetime.strptime(time_part, "%H-%M-%S").time()
+
+                video_timestamp = datetime.combine(date_obj.date(), time_obj)
+                logger.info(f"从文件名解析出视频开始时间: {video_timestamp}")
+            except Exception as e:
+                logger.warning(f"无法从文件名解析时间: {str(e)}")
+                video_timestamp = None
+
+            # 计算目标时间点对应的帧位置
+            target_frame = None
+
+            if video_timestamp:
+                # 计算时间差（秒）
+                time_diff = (timestamp - video_timestamp).total_seconds()
+
+                if 0 <= time_diff <= video_duration:
+                    target_frame = int(time_diff * fps)
+                    logger.info(f"计算得到目标帧位置: {target_frame}")
+                else:
+                    logger.warning(f"目标时间点不在视频范围内: 时间差={time_diff}秒, 视频时长={video_duration}秒")
+
+            # 如果无法计算目标帧，则使用视频中间位置
+            if target_frame is None:
+                target_frame = total_frames // 2
+                logger.info(f"使用视频中间位置作为目标帧: {target_frame}")
+
+            # 计算提取帧的范围
+            start_frame = max(0, target_frame - int(window_seconds * fps / 2))
+            end_frame = min(total_frames - 1, target_frame + int(window_seconds * fps / 2))
+
+            logger.info(f"提取帧范围: {start_frame} 到 {end_frame}")
 
             # 提取帧
             frames = []
-            current_frame = start_frame
-
-            print(f"从视频中提取帧: {video_path}")
-            print(f"FPS: {fps}, 总帧数: {total_frames}, 持续时间: {duration:.2f}秒")
-            print(f"开始帧: {start_frame}, 结束帧: {end_frame}, 间隔: {frame_interval}")
-
-            # 设置当前帧位置
             cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-            # 使用tqdm显示进度
-            for current_pos in tqdm(range(start_frame, end_frame, frame_interval), desc="提取帧"):
-                # 设置当前帧位置
-                cap.set(cv2.CAP_PROP_POS_FRAMES, current_pos)
-
-                # 读取帧
+            # 每秒提取1帧
+            step = int(fps)
+            for frame_idx in range(start_frame, end_frame + 1, step):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
                 ret, frame = cap.read()
-                if not ret:
-                    break
-
-                # 转换为RGB格式并添加到列表
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frames.append(frame_rgb)
+                if ret:
+                    frames.append(frame)
+                    logger.info(f"成功提取帧: {frame_idx}, 形状: {frame.shape}")
+                else:
+                    logger.warning(f"无法读取帧: {frame_idx}")
 
             cap.release()
-            print(f"成功提取了 {len(frames)} 帧")
+            logger.info(f"完成帧提取，共提取 {len(frames)} 帧")
             return frames
 
         except Exception as e:
-            print(f"提取帧失败: {e}")
+            logger.error(f"提取帧时发生错误: {str(e)}", exc_info=True)
             return []
 
-    def detect_pedestrians(self, frame):
+    def _detect_person_in_frames(self, frames, save_dir=None):
         """
-        从帧中检测行人
+        在帧中检测人物并可选择保存到本地
 
         Args:
-            frame: 图像帧
+            frames: 视频帧列表
+            save_dir: 保存检测结果的目录路径，如不提供则不保存
 
         Returns:
-            list: 行人图像列表
+            检测到的人物图像列表
         """
-        # 这里使用简单的行人检测器进行示例
-        # 实际应用中，您可能需要使用更高级的检测器如YOLOv8、Faster R-CNN等
+        logger.info(f"开始在 {len(frames)} 帧中检测人物")
+
         try:
-            # 创建HOG行人检测器
+            # 加载人物检测模型（此处使用简单的HOG检测器作为示例）
             hog = cv2.HOGDescriptor()
             hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 
-            # 检测行人
-            boxes, weights = hog.detectMultiScale(
-                frame,
-                winStride=(8, 8),
-                padding=(4, 4),
-                scale=1.05
-            )
+            person_images = []
 
-            pedestrians = []
-            for i, (x, y, w, h) in enumerate(boxes):
-                # 提取行人图像
-                person_img = frame[max(0, y):y + h, max(0, x):x + w]
-                pedestrians.append({
-                    'image': person_img,
-                    'box': (x, y, w, h),
-                    'confidence': weights[i]
-                })
+            # 创建保存目录
+            if save_dir:
+                os.makedirs(save_dir, exist_ok=True)
+                logger.info(f"行人图像将保存到: {save_dir}")
 
-            return pedestrians
+            # 当前时间戳用于文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+            for i, frame in enumerate(frames):
+                # 检测人物
+                boxes, weights = hog.detectMultiScale(frame, winStride=(8, 8), padding=(4, 4), scale=1.05)
+
+                # 处理每个检测到的人物
+                for j, (x, y, w, h) in enumerate(boxes):
+                    # 调整边界框，确保不超出图像范围
+                    x = max(0, x)
+                    y = max(0, y)
+                    w = min(w, frame.shape[1] - x)
+                    h = min(h, frame.shape[0] - y)
+
+                    if w > 0 and h > 0:
+                        # 提取人物图像
+                        person_img = frame[y:y + h, x:x + w]
+                        person_images.append(person_img)
+
+                        # 保存到本地
+                        if save_dir:
+                            filename = f"person_{timestamp}_frame{i}_det{j}.jpg"
+                            filepath = os.path.join(save_dir, filename)
+                            cv2.imwrite(filepath, person_img)
+                            logger.info(f"已保存行人图像: {filepath}")
+
+            logger.info(f"人物检测完成，共提取 {len(person_images)} 个人物图像")
+            return person_images
 
         except Exception as e:
-            print(f"行人检测失败: {e}")
+            logger.error(f"人物检测失败: {str(e)}", exc_info=True)
             return []
 
-    def process(self, query_image_path, records=None, algorithm='mgn',
-                threshold=0.7, callback=None, fetch_records=True):
+    def extract_features(self, records, algorithm='mgn', callback=None, save_dir=None):
         """
-        执行重识别处理
+        提取特征向量，并返回匹配到的图像帧
 
-        Args:
-            query_image_path: 查询图像路径
-            records: 包含学生记录的DataFrame，如果为None则从数据库获取
-            algorithm: 使用的重识别算法
-            threshold: 匹配阈值
+        参数:
+            records: 包含图像信息的记录列表
+            algorithm: 使用的特征提取算法，默认为'mgn'
             callback: 进度回调函数
-            fetch_records: 是否从数据库获取记录
+            save_dir: 保存检测结果的目录路径
 
-        Returns:
-            处理后的DataFrame，包含视频路径等信息
+        返回:
+            添加了特征向量和图像数据的记录列表
         """
-        print(f"使用{algorithm}算法进行重识别处理，阈值：{threshold}")
+        logger.info(f"开始批量特征提取，使用算法: {algorithm}，记录数量: {len(records)}")
+        try:
+            if not records:
+                logger.warning("没有提供记录，返回空列表")
+                return []
 
-        # 设置模型
-        if not self.set_model(algorithm):
-            print("模型设置失败，无法继续处理")
-            return pd.DataFrame()
+            # 检查并打印输入记录的结构
+            logger.info(f"特征提取输入记录示例: {records[0] if records else 'No records'}")
 
-        # 提取查询图像特征
-        query_feature = self.extract_feature(query_image_path)
-        if query_feature is None:
-            print("无法从查询图像中提取特征")
-            return pd.DataFrame()
+            # 如果当前实例没有数据库接口，使用默认的数据库接口
+            if not hasattr(self, 'db_interface') or self.db_interface is None:
+                logger.info("数据库接口未初始化，尝试导入默认数据库接口")
+                try:
+                    from backend.dbInterface.db_interface import DatabaseInterface
+                    db_config = {
+                        'type': 'mysql',
+                        'host': 'localhost',
+                        'port': 3306,
+                        'user': 'root',
+                        'password': '123456',
+                        'database': 'trajectory',
+                    }
+                    self.db_interface = DatabaseInterface(db_config)
+                    logger.info("成功初始化默认数据库接口")
+                except Exception as e:
+                    logger.error(f"初始化数据库接口失败: {str(e)}")
 
-        # 如果需要从数据库获取记录
-        if fetch_records and records is None:
-            records = self._fetch_records_from_db()
+            # 获取视频路径
+            if hasattr(self, 'db_interface') and self.db_interface:
+                logger.info("开始获取视频路径")
+                records = self._get_video_paths(records)
+                logger.info("视频路径获取完成")
+            else:
+                logger.warning("无法获取视频路径，数据库接口未初始化")
 
-        if records is None or records.empty:
-            print("没有记录需要处理")
-            return pd.DataFrame()
+            features_records = []
+            total_records = len(records)
+            logger.info(f"总记录数: {total_records}")
 
-        # 确保数据框有必要的列
-        required_columns = ['id', 'student_id', 'camera_id', 'timestamp', 'location_x', 'location_y']
-        missing_cols = [col for col in required_columns if col not in records.columns]
-        if missing_cols:
-            print(f"数据缺少必要的列: {missing_cols}")
-            return pd.DataFrame()
+            for idx, record in enumerate(records):
+                logger.info(f"处理第 {idx + 1}/{total_records} 条记录")
 
-        # 按时间排序
-        sorted_records = records.sort_values(by='timestamp').reset_index(drop=True)
+                # 检查记录是否包含必要字段
+                if 'id' not in record:
+                    logger.warning(f"记录缺少id字段: {record}")
+                    record['id'] = idx  # 使用索引作为临时ID
+                    logger.info(f"为记录分配临时ID: {idx}")
 
-        # 进度跟踪
-        total_records = len(sorted_records)
+                logger.info(f"处理记录ID: {record['id']}")
 
-        # 阶段1: 准备视频路径和时间信息
-        if callback:
-            callback('preparing', 10)
-        print("准备视频路径和时间信息...")
+                # 尝试获取图像数据
+                image_data = None
 
-        # 添加视频路径
-        records_with_video = self._add_video_paths(sorted_records)
-        # 过滤掉没有视频的记录
-        valid_records = records_with_video[records_with_video['video_path'].notna()].reset_index(drop=True)
-        print(f"有效记录数: {len(valid_records)}/{total_records}")
+                # 检查记录中是否包含图像数据
+                if 'image' in record:
+                    logger.info("使用直接提供的图像数据")
+                    image_data = record['image']
+                elif 'image_base64' in record:
+                    logger.info("检测到base64编码的图像数据")
+                    import base64
+                    # 从base64解码图像
+                    try:
+                        # 检查是否包含data:image前缀
+                        image_str = record['image_base64']
+                        if ',' in image_str:
+                            logger.info("检测到data:image前缀，进行分割处理")
+                            image_str = image_str.split(',', 1)[1]
 
-        # 阶段2: 处理每条记录
-        if callback:
-            callback('processing', 20)
+                        logger.info("解码base64图像数据")
+                        image_bytes = base64.b64decode(image_str)
+                        nparr = np.frombuffer(image_bytes, np.uint8)
+                        image_data = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        if image_data is not None:
+                            logger.info(f"成功从base64解码图像，形状: {image_data.shape}")
+                        else:
+                            logger.error("从base64解码图像失败，结果为None")
+                    except Exception as e:
+                        logger.error(f"解码base64图像时出错: {e}", exc_info=True)
 
-        # 创建结果DataFrame
-        result_records = pd.DataFrame()
+                # 如果记录中没有图像数据，尝试从image_path加载
+                if image_data is None and 'image_path' in record:
+                    logger.info(f"尝试从路径加载图像: {record['image_path']}")
+                    try:
+                        image_data = cv2.imread(record['image_path'])
+                        if image_data is not None:
+                            logger.info(f"成功从路径加载图像，形状: {image_data.shape}")
+                        else:
+                            logger.error(f"从路径加载图像失败，结果为None: {record['image_path']}")
+                    except Exception as e:
+                        logger.error(f"从路径加载图像时出错: {e}", exc_info=True)
 
-        # 处理记录
-        for idx, record in tqdm(valid_records.iterrows(), total=len(valid_records), desc="处理记录"):
-            try:
-                # 获取视频路径和时间信息
-                video_path = record['video_path']
-                camera_id = record['camera_id']
-                timestamp = pd.to_datetime(record['timestamp'])
+                # 如果记录中没有图像数据，尝试从视频中提取
+                extracted_person_images = []
+                if image_data is None and 'video_path' in record and record['video_path']:
+                    logger.info(f"尝试从视频中提取图像: {record['video_path']}")
+                    try:
+                        # 从视频中提取帧
+                        frames = self._extract_frames_from_video(
+                            record['video_path'],
+                            record.get('timestamp', '')
+                        )
 
-                # 计算视频中的时间点（秒）
-                video_start_time = pd.to_datetime(record['video_start_time'])
-                time_diff = (timestamp - video_start_time).total_seconds()
+                        if frames:
+                            # 从帧中检测人物
+                            person_images = self._detect_person_in_frames(frames, save_dir=save_dir)
+                            extracted_person_images = person_images  # 保存所有检测到的人物图像
 
-                # 在时间点前后提取帧（5秒窗口）
-                start_time = max(0, time_diff - 2.5)
-                end_time = time_diff + 2.5
+                            if person_images:
+                                # 使用第一个检测到的人物图像
+                                image_data = person_images[0]
+                                logger.info(f"成功从视频中提取人物图像，形状: {image_data.shape}")
+                            else:
+                                logger.warning("未在视频帧中检测到人物")
+                        else:
+                            logger.warning("未能从视频中提取帧")
+                    except Exception as e:
+                        logger.error(f"从视频中提取图像时出错: {e}", exc_info=True)
 
-                # 提取帧
-                frames = self.extract_frames_from_video(
-                    video_path,
-                    start_time=start_time,
-                    end_time=end_time,
-                    interval=0.5  # 每0.5秒提取一帧
-                )
+                # 保存提取到的所有图像帧
+                if extracted_person_images:
+                    record['extracted_frames'] = extracted_person_images
+                    logger.info(f"为记录 {record['id']} 添加了 {len(extracted_person_images)} 个提取的图像帧")
 
-                if not frames:
-                    print(f"从视频 {video_path} 中没有提取到帧")
+                # 如果成功获取到图像数据，保存到记录中
+                if image_data is not None:
+                    record['processed_image'] = image_data.copy()
+                    logger.info(f"为记录 {record['id']} 添加了处理后的图像数据")
+
+                # 如果没有图像数据，使用一个默认图像
+                if image_data is None:
+                    logger.warning(f"记录 {record['id']} 没有图像数据，使用随机特征")
+                    # 生成一个随机特征向量作为占位符
+                    feature_vector = np.random.rand(256).astype(np.float32)
+                    record['feature_vector'] = feature_vector.tolist()
+                    features_records.append(record)
+                    logger.info(f"为记录 {record['id']} 添加了随机特征向量")
                     continue
 
-                # 在每一帧中检测行人
-                max_similarity = 0
-                best_match = None
+                # 根据所选算法提取特征
+                logger.info(f"为记录 {record['id']} 提取特征向量，使用算法: {algorithm}")
+                feature_vector = self._extract_feature_vector(image_data, algorithm)
 
-                for frame_idx, frame in enumerate(frames):
-                    pedestrians = self.detect_pedestrians(frame)
+                # 将特征向量添加到记录中
+                record['feature_vector'] = feature_vector.tolist()
+                features_records.append(record)
+                logger.info(f"记录 {record['id']} 特征提取完成")
 
-                    for ped_idx, pedestrian in enumerate(pedestrians):
-                        # 将行人图像转换为PIL Image
-                        ped_img = Image.fromarray(pedestrian['image'])
+                # 更新进度
+                if callback:
+                    progress = int((idx + 1) / total_records * 100)
+                    logger.info(f"特征提取进度: {progress}%")
+                    callback('featureMatching', progress // 2)  # 前半部分进度
 
-                        # 暂存行人图像以提取特征
-                        temp_path = f"temp_pedestrian_{idx}_{frame_idx}_{ped_idx}.jpg"
-                        ped_img.save(temp_path)
+            logger.info(f"特征提取完成，处理了 {len(features_records)} 条记录")
+            return features_records
 
-                        # 提取特征
-                        ped_feature = self.extract_feature(temp_path)
+        except Exception as e:
+            import traceback
+            logger.error(f"特征提取过程中出错: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise Exception(f"记录缺少必要的字段或提取特征时出错: {str(e)}")
 
-                        # 删除临时文件
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
+    def match_features(self, records, threshold=0.6, callback=None, save_dir=None):
+        """
+        对特征向量进行相似度匹配，并保存匹配结果图像
 
-                        if ped_feature is None:
-                            continue
+        Args:
+            records: 包含特征向量的记录列表
+            threshold: 相似度阈值，低于此值的匹配将被忽略
+            callback: 进度回调函数
+            save_dir: 保存匹配结果图像的目录路径
 
-                        # 计算相似度
-                        similarity = self.calculate_similarity(query_feature, ped_feature)
+        Returns:
+            匹配结果列表
+        """
+        try:
+            from scipy.spatial.distance import cosine
+            import traceback
+            import os
+            import cv2
 
-                        # 更新最佳匹配
-                        if similarity > max_similarity:
-                            max_similarity = similarity
-                            best_match = pedestrian.copy()
-                            best_match['similarity'] = similarity
-                            best_match['frame_time'] = start_time + frame_idx * 0.5
+            logger.info(f"开始特征匹配，记录数量: {len(records)}")
 
-                # 检查最佳匹配是否超过阈值
-                if max_similarity >= threshold:
-                    # 创建匹配记录
-                    match_record = record.copy()
-                    match_record['confidence'] = max_similarity
-                    match_record['frame_time'] = best_match['frame_time']
+            # 创建保存目录
+            if save_dir is None:
+                save_dir = os.path.join("matching_results", datetime.now().strftime("%Y%m%d_%H%M%S"))
 
-                    # 添加到结果
-                    result_records = pd.concat([result_records, pd.DataFrame([match_record])], ignore_index=True)
+            if save_dir:
+                os.makedirs(save_dir, exist_ok=True)
+                logger.info(f"匹配结果将保存到: {save_dir}")
 
-                    print(f"找到匹配: 记录ID={record['id']}, 相似度={max_similarity:.4f}, 时间={timestamp}")
+            # 提取所有有效的特征向量
+            logger.info("提取所有特征向量")
+            feature_vectors = []
+            valid_indices = []
+            record_ids = []
+            expected_dim = 2048  # 统一使用2048维特征向量
 
-            except Exception as e:
-                print(f"处理记录 {idx} 时出错: {e}")
+            for i, record in enumerate(records):
+                if 'feature_vector' in record and record['feature_vector'] is not None:
+                    feature_vector = record['feature_vector']
+                    # 统一特征向量维度
+                    if len(feature_vector) != expected_dim:
+                        logger.warning(
+                            f"记录 {record['id']} 的特征向量维度为 {len(feature_vector)}，需要调整为 {expected_dim}")
+                        if len(feature_vector) < expected_dim:
+                            # 如果维度不足，填充零
+                            padded_vector = np.zeros(expected_dim)
+                            padded_vector[:len(feature_vector)] = feature_vector
+                            feature_vector = padded_vector
+                        else:
+                            # 如果维度过大，截断
+                            feature_vector = feature_vector[:expected_dim]
 
-            # 更新进度
-            if callback:
-                progress = 20 + int(80 * (idx + 1) / len(valid_records))
-                callback('processing', min(99, progress))
+                    feature_vectors.append(feature_vector)
+                    valid_indices.append(i)
+                    record_ids.append(record['id'])
 
-        # 最终阶段完成
-        if callback:
-            callback('completed', 100)
+            logger.info(f"提取了 {len(feature_vectors)} 个特征向量")
 
-        # 排序并重置索引
-        if not result_records.empty:
-            result_records = result_records.sort_values(by=['confidence', 'timestamp'],
-                                                        ascending=[False, True]).reset_index(drop=True)
-            print(f"重识别处理完成，找到 {len(result_records)} 条匹配记录")
-            if not result_records.empty:
-                print("最佳匹配示例:")
-                print(result_records.head(1)[['id', 'camera_id', 'timestamp', 'confidence', 'video_path']])
+            if len(feature_vectors) == 0:
+                return []
+
+            # 计算距离矩阵
+            logger.info("计算特征向量距离矩阵")
+            matches = []
+
+            for i in range(len(feature_vectors)):
+                # 如果是query记录，则与其他所有记录比较
+                if record_ids[i] == 'query':
+                    query_idx = i
+                    query_record = records[valid_indices[i]]
+
+                    # 确保查询图像可用
+                    query_image = None
+                    if 'processed_image' in query_record:
+                        query_image = query_record['processed_image']
+
+                    # 总比较数量用于计算进度
+                    total_comparisons = len(feature_vectors) - 1
+
+                    for j in range(len(feature_vectors)):
+                        if i != j:  # 不与自身比较
+                            try:
+                                # 计算余弦距离
+                                dist = cosine(feature_vectors[i], feature_vectors[j])
+                                similarity = 1 - dist  # 转换为相似度
+
+                                # 仅当相似度高于阈值时，保存匹配信息和图像
+                                if similarity > threshold:
+                                    match_record = records[valid_indices[j]]
+                                    match_info = {
+                                        'query_id': record_ids[i],
+                                        'match_id': record_ids[j],
+                                        'similarity': float(similarity),
+                                        'camera_id': match_record.get('camera_id', 'unknown'),
+                                        'timestamp': match_record.get('timestamp', ''),
+                                        'video_path': match_record.get('video_path', ''),
+                                        'location_x': match_record.get('location_x', 0),
+                                        'location_y': match_record.get('location_y', 0),
+                                    }
+
+                                    # 添加所有其他字段（除了大型数据）
+                                    for k, v in match_record.items():
+                                        if k not in ['feature_vector', 'image', 'processed_image', 'extracted_frames']:
+                                            match_info[k] = v
+
+                                    # 保存匹配图像到指定目录
+                                    if save_dir:
+                                        # 保存主要匹配图像
+                                        match_image = None
+                                        if 'processed_image' in match_record:
+                                            match_image = match_record['processed_image']
+                                        elif 'extracted_frames' in match_record and match_record['extracted_frames']:
+                                            match_image = match_record['extracted_frames'][0]
+
+                                        if match_image is not None:
+                                            # 为匹配图像创建文件名
+                                            match_filename = f"match_{record_ids[j]}_sim{similarity:.4f}.jpg"
+                                            match_path = os.path.join(save_dir, match_filename)
+
+                                            # 保存图像
+                                            cv2.imwrite(match_path, match_image)
+                                            logger.info(f"保存匹配图像: {match_path}, 相似度: {similarity:.4f}")
+                                            match_info['match_image_path'] = match_path
+
+                                        # 如果有提取的帧，仅保存匹配度高的图像帧
+                                        if 'extracted_frames' in match_record and match_record['extracted_frames']:
+                                            saved_frames = []
+                                            # 为每个帧创建单独的特征向量并计算相似度
+                                            for frame_idx, frame in enumerate(match_record['extracted_frames']):
+                                                # 使用已加载的模型为每个帧提取特征
+                                                try:
+                                                    frame_feature = self._extract_feature_vector(frame, 'mgn')
+                                                    if frame_feature is not None:
+                                                        # 计算与查询特征的相似度
+                                                        frame_dist = cosine(feature_vectors[i], frame_feature)
+                                                        frame_similarity = 1 - frame_dist
+
+                                                        # 只保存相似度高于阈值的帧
+                                                        if frame_similarity > threshold:
+                                                            frame_filename = f"match_{record_ids[j]}_frame{frame_idx}_sim{frame_similarity:.4f}.jpg"
+                                                            frame_path = os.path.join(save_dir, frame_filename)
+                                                            cv2.imwrite(frame_path, frame)
+                                                            saved_frames.append({
+                                                                'path': frame_path,
+                                                                'similarity': float(frame_similarity)
+                                                            })
+                                                            logger.info(
+                                                                f"保存匹配帧: {frame_path}, 相似度: {frame_similarity:.4f}")
+                                                except Exception as fe:
+                                                    logger.warning(f"为帧 {frame_idx} 提取特征时出错: {str(fe)}")
+                                                    continue
+
+                                            if saved_frames:
+                                                match_info['matched_frames'] = saved_frames
+                                                logger.info(
+                                                    f"为匹配 {record_ids[j]} 保存了 {len(saved_frames)} 个相似帧")
+
+                                    matches.append(match_info)
+                                    logger.info(f"找到匹配: ID={match_record.get('id')}, 相似度={similarity:.4f}")
+
+                                # 更新进度
+                                if callback and total_comparisons > 0:
+                                    progress = int((j + (1 if j > i else 0)) / total_comparisons * 100)
+                                    callback("特征匹配", progress)
+                                    logger.info(f"特征匹配: {progress}%")
+
+                            except Exception as e:
+                                logger.error(f"计算记录 {record_ids[i]} 和 {record_ids[j]} 的相似度时出错: {str(e)}")
+                                logger.error(traceback.format_exc())
+
+            # 按相似度从高到低排序
+            matches.sort(key=lambda x: x['similarity'], reverse=True)
+
+            # 打印匹配结果
+            logger.info(f"特征匹配完成，找到 {len(matches)} 个匹配")
+            for idx, match in enumerate(matches):
+                logger.info(f"匹配 #{idx + 1}:")
+                logger.info(f"  摄像头ID: {match['camera_id']}")
+                logger.info(f"  时间戳: {match['timestamp']}")
+                logger.info(f"  视频路径: {match['video_path']}")
+                logger.info(f"  相似度: {match['similarity']:.4f}")
+                if 'match_image_path' in match:
+                    logger.info(f"  匹配图像保存路径: {match['match_image_path']}")
+                if 'matched_frames' in match:
+                    logger.info(f"  匹配帧数量: {len(match['matched_frames'])}")
+                logger.info("---")
+
+            return matches
+
+        except Exception as e:
+            logger.error(f"特征匹配过程中出错: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise Exception(f"特征匹配时出错: {str(e)}")
+
+def load_image_safe(image_path_or_data):
+    """安全加载图像，支持路径字符串或直接的图像数据"""
+    try:
+        if isinstance(image_path_or_data, str):
+            # 如果是路径字符串，从文件加载
+            if os.path.exists(image_path_or_data):
+                img = cv2.imread(image_path_or_data)
+                if img is not None:
+                    logger.info(f"图像加载成功: {image_path_or_data}, 形状: {img.shape}")
+                    return img, True
+                else:
+                    logger.warning(f"无法加载图像: {image_path_or_data}")
+                    return None, False
+            else:
+                logger.warning(f"图像路径不存在: {image_path_or_data}")
+                return None, False
+        elif isinstance(image_path_or_data, np.ndarray):
+            # 如果已经是图像数据，直接返回
+            logger.info(f"使用已提供的图像数据，形状: {image_path_or_data.shape}")
+            return image_path_or_data, True
         else:
-            print("未找到匹配记录")
-
-        return result_records
-
-    def _fetch_records_from_db(self, days=7):
-        """
-        从数据库获取最近的记录
-
-        Args:
-            days: 获取最近几天的记录
-
-        Returns:
-            DataFrame: 记录数据框
-        """
-        try:
-            print(f"从数据库获取最近 {days} 天的记录...")
-
-            query = text("""
-            SELECT id, student_id, camera_id, timestamp, location_x, location_y
-            FROM student_appearances
-            WHERE timestamp >= DATE_SUB(CURRENT_DATE(), INTERVAL :days DAY)
-            ORDER BY timestamp DESC
-            """)
-
-            with self.db_engine.connect() as conn:
-                result = conn.execute(query, {"days": days})
-                records = pd.DataFrame(result.fetchall())
-                if not records.empty:
-                    records.columns = result.keys()
-
-            if records.empty:
-                print("没有找到记录")
-                return pd.DataFrame()
-
-            print(f"从数据库获取了 {len(records)} 条记录")
-            return records
-
-        except Exception as e:
-            print(f"从数据库获取记录失败: {e}")
-            return pd.DataFrame()
-
-    def _add_video_paths(self, records):
-        """
-        为每条记录添加对应的视频路径
-
-        Args:
-            records: 记录DataFrame
-
-        Returns:
-            添加了视频路径的DataFrame
-        """
-        print("正在从数据库获取视频路径信息...")
-
-        # 初始化视频路径列
-        result_records = records.copy()
-        result_records['video_path'] = None
-        result_records['video_start_time'] = None
-        result_records['video_end_time'] = None
-
-        try:
-            # 为每条记录查询对应的视频信息
-            for idx, record in tqdm(records.iterrows(), total=len(records), desc="查询视频路径"):
-                camera_id = record['camera_id']
-                record_time = pd.to_datetime(record['timestamp'])
-                record_date = record_time.date()
-                record_time_only = record_time.time()
-
-                # 构造SQL查询
-                query = text("""
-                SELECT video_path, start_time, end_time 
-                FROM camera_videos 
-                WHERE camera_id = :camera_id 
-                AND DATE(start_time) = :record_date 
-                AND start_time <= :record_time 
-                AND end_time >= :record_time
-                """)
-
-                with self.db_engine.connect() as conn:
-                    result = conn.execute(
-                        query,
-                        {
-                            "camera_id": camera_id,
-                            "record_date": record_date,
-                            "record_time": record_time
-                        }
-                    ).fetchone()
-
-                    if result:
-                        result_records.at[idx, 'video_path'] = result[0]
-                        result_records.at[idx, 'video_start_time'] = result[1]
-                        result_records.at[idx, 'video_end_time'] = result[2]
-
-        except Exception as e:
-            print(f"获取视频路径时出错: {e}")
-
-        # 打印结果
-        video_count = result_records['video_path'].notna().sum()
-        print(f"共找到 {video_count}/{len(records)} 条记录的视频")
-
-        return result_records
+            # 不支持的类型
+            logger.warning(f"不支持的图像数据类型: {type(image_path_or_data)}")
+            return None, False
+    except Exception as e:
+        logger.warning(f"图像加载异常: {e}")
+        return None, False
 
 
-def demo_usage():
-    """演示如何使用ReIDProcessor"""
-    # 初始化处理器
-    processor = ReIDProcessor(db_url='mysql+pymysql://root:123456@localhost/trajectory')
+def main():
+    """主函数，用于演示ReIDProcessor的使用"""
+    logger.info("开始演示ReIDProcessor")
 
-    # 查询图像路径
-    query_image = "path/to/query_person.jpg"
+    # 初始化ReIDProcessor
+    processor = ReIDProcessor()
+    image_path = "D:/lyycode02/student-trajectory-generation/frontend/public/2.jpg"
 
-    # 进度回调函数
-    def progress_callback(stage, percent):
-        print(f"处理阶段: {stage}, 进度: {percent}%")
-
-    # 执行处理
-    results = processor.process(
-        query_image_path=query_image,
-        algorithm='mgn',  # 使用MGN模型
-        threshold=0.7,  # 设置匹配阈值
-        callback=progress_callback
-    )
-
-    # 输出结果
-    if not results.empty:
-        print(f"\n找到 {len(results)} 条匹配记录:")
-        for idx, result in results.iterrows():
-            print(f"{idx + 1}. 相机: {result['camera_id']}, 时间: {result['timestamp']}, "
-                  f"位置: ({result['location_x']}, {result['location_y']}), "
-                  f"相似度: {result['confidence']:.4f}")
+    # 加载测试图像
+    query_image, success = load_image_safe(image_path)
+    if not success:
+        logger.warning(f"无法加载图像: {image_path}，使用默认图像")
+        query_image = np.ones((384, 128, 3), dtype=np.uint8) * 200
     else:
-        print("未找到匹配记录")
+        logger.info(f"成功加载查询图像，形状: {query_image.shape}")
+
+    # 创建测试记录
+    test_records = []
+    for i in range(5):
+        record = {
+            'id': f'test_{i}',
+            'camera_id': i + 1,
+            'timestamp': datetime.now() - timedelta(minutes=i * 10),
+            'location_x': 100 + i * 10,
+            'location_y': 200 + i * 5
+        }
+        test_records.append(record)
+
+    try:
+        logger.info("开始提取特征")
+        query_record = {'id': 'query', 'image': query_image}  # 明确设置image字段
+
+        features_records = processor.extract_features(
+            [query_record] + test_records,
+            algorithm='mgn',
+            callback=lambda stage, progress: logger.info(f"{stage}: {progress:.1f}%"),
+            save_dir = os.path.join("detecting_results", datetime.now().strftime("%Y%m%d_%H%M%S"))
+        )
+
+        # 检查特征向量维度
+        for record in features_records:
+            if 'feature_vector' in record and record['feature_vector'] is not None:
+                logger.info(f"记录 {record['id']} 的特征向量维度: {len(record['feature_vector'])}")
+
+        # 匹配特征
+        logger.info("开始特征匹配")
+        matched_records = processor.match_features(
+            features_records,
+            threshold=0.8,
+            callback=lambda stage, progress: logger.info(f"{stage}: {progress:.1f}%")
+        )
+
+        logger.info(f"匹配结果数量: {len(matched_records)}")
+
+    except Exception as e:
+        logger.error(f"演示过程中出错: {str(e)}", exc_info=True)
 
 
 if __name__ == "__main__":
-    demo_usage()
+    main()

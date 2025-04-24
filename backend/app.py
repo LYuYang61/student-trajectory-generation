@@ -232,54 +232,95 @@ def analyze_spatiotemporal():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-@app.route('/reid', methods=['POST'])
-def perform_reid():
-    """执行ReID重识别处理"""
-    data = request.json
-    records = pd.DataFrame(data.get('records'))
-    algorithm = data.get('algorithm', 'osnet')
-    threshold = data.get('threshold', 70)
+# 特征提取端点
+@app.route('/feature_extraction', methods=['POST'])
+def feature_extraction():
+    try:
+        data = request.get_json()
+        if not data or 'records' not in data:
+            return jsonify({'status': 'error', 'message': '缺少记录数据'})
 
-    # 进度通知函数
-    def progress_callback(stage, percentage):
-        socketio.emit('reid_progress', {
-            'stage': stage,
-            'percentage': percentage
+        records = data['records']
+        algorithm = data.get('algorithm', 'mgn')
+
+        def progress_callback(stage, percentage):
+            socketio.emit('reid_progress', {'stage': stage, 'percentage': percentage})
+
+        # 执行特征提取
+        reid_processor = ReIDProcessor()
+        features_records = reid_processor.extract_features(records, algorithm, progress_callback)
+
+        return jsonify({
+            'status': 'success',
+            'features_records': features_records
         })
 
-    print(f"开始执行ReID处理，算法: {algorithm}, 阈值: {threshold}")
+    except Exception as e:
+        logging.error(f"特征提取错误: {str(e)}")
+        return jsonify({'status': 'error', 'message': f'特征提取错误: {str(e)}'})
 
-    # 调用ReID处理
-    reid_results = reid_processor.process(
-        records,
-        algorithm=algorithm,
-        threshold=threshold / 100,
-        callback=progress_callback
-    )
 
-    # 构建轨迹
-    trajectory = spatiotemporal_analyzer.find_most_likely_trajectory(reid_results)
+# 特征匹配端点
+@app.route('/feature_matching', methods=['POST'])
+def feature_matching():
+    try:
+        data = request.get_json()
+        if not data or 'features_records' not in data:
+            return jsonify({'status': 'error', 'message': '缺少特征记录数据'})
 
-    # 格式化结果，确保所有字段都是JSON可序列化的
-    reid_dict = reid_results.to_dict('records')
+        features_records = data['features_records']
+        threshold = data.get('threshold', 0.7)
 
-    # 打印重要信息
-    print("====== ReID 处理结果 ======")
-    print(f"处理记录数: {len(reid_results)}")
-    print(f"找到轨迹点数: {len(trajectory)}")
+        def progress_callback(stage, percentage):
+            socketio.emit('reid_progress', {'stage': stage, 'percentage': percentage})
 
-    for record in reid_dict[:5]:  # 只打印前5条记录的详细信息
-        print(f"记录ID: {record.get('id')}, 摄像头: {record.get('camera_id')}, "
-              f"时间: {record.get('timestamp')}, 置信度: {record.get('confidence'):.2f}, "
-              f"视频路径: {record.get('video_path')}")
+        # 执行特征匹配
+        reid_processor = ReIDProcessor()
+        matched_records = reid_processor.match_features(
+            features_records,
+            threshold=0.7,
+            callback=progress_callback,
+            save_dir="matching_results"
+        )
 
-    # 返回重识别和轨迹结果
-    return jsonify({
-        'status': 'success',
-        'reid_results': reid_dict,
-        'trajectory': trajectory
-    })
+        return jsonify({
+            'status': 'success',
+            'matched_records': matched_records
+        })
 
+    except Exception as e:
+        logging.error(f"特征匹配错误: {str(e)}")
+        return jsonify({'status': 'error', 'message': f'特征匹配错误: {str(e)}'})
+
+
+# 保留原有端点以保持向后兼容性
+@app.route('/reid', methods=['POST'])
+def reid():
+    try:
+        data = request.get_json()
+        if not data or 'records' not in data:
+            return jsonify({'status': 'error', 'message': '缺少记录数据'})
+
+        records = data['records']
+        algorithm = data.get('algorithm', 'mgn')
+        threshold = data.get('threshold', 0.7)
+
+        def progress_callback(stage, percentage):
+            socketio.emit('reid_progress', {'stage': stage, 'percentage': percentage})
+
+        # 执行重识别
+        reid_processor = ReIDProcessor()
+        features_records = reid_processor.extract_features(records, algorithm, progress_callback)
+        matched_records = reid_processor.match_features(features_records, threshold, progress_callback)
+
+        return jsonify({
+            'status': 'success',
+            'matched_records': matched_records
+        })
+
+    except Exception as e:
+        logging.error(f"重识别错误: {str(e)}")
+        return jsonify({'status': 'error', 'message': f'重识别错误: {str(e)}'})
 
 @app.route('/trajectory', methods=['POST'])
 def get_trajectory():

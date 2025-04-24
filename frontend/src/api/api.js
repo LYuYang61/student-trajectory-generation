@@ -76,6 +76,23 @@ export const analyzeSpacetimeConstraints = (data) => {
   })
 }
 
+export const extractFeatures = (data) => {
+  return request({
+    method: 'post',
+    url: '/feature_extraction',
+    data: data
+  })
+}
+
+export const matchFeatures = (data) => {
+  return request({
+    method: 'post',
+    url: '/feature_matching',
+    data: data
+  })
+}
+
+// 保留原有API以保持向后兼容性
 export const performReID = (data) => {
   return request({
     method: 'post',

@@ -99,7 +99,7 @@
               <el-progress :percentage="reIdProgress.spatialTemporal" :status="reIdProgress.spatialTemporal === 100 ? 'success' : ''"></el-progress>
             </div>
             <div class="progress-item">
-              <span class="progress-label">特征提取与匹配</span>
+              <span class="progress-label">特征提取</span>
               <el-progress :percentage="reIdProgress.featureMatching" :status="reIdProgress.featureMatching === 100 ? 'success' : ''"></el-progress>
             </div>
             <div class="progress-item">
@@ -231,7 +231,7 @@
 import Menu from '@/components/Menu.vue'
 import BaiduMap from '@/components/map.vue'
 import io from 'socket.io-client'
-import {filterRecords, analyzeSpacetimeConstraints, performReID, getTrajectory} from '../api/api'
+import {filterRecords, analyzeSpacetimeConstraints, extractFeatures, matchFeatures} from '../api/api'
 
 export default {
   name: 'TrackVisualization',
@@ -489,14 +489,12 @@ export default {
 
       try {
         // 第一步：时空约束分析
-        // 准备请求数据 - 确保包含camera_id字段
         const spatiotemporalRequestData = {
           records: this.filterResults.map(record => {
             const cameraId = parseInt(record.cameraId)
             return {
               id: record.id,
               student_id: record.studentId || null,
-              // 确保camera_id是有效的数字
               camera_id: isNaN(cameraId) ? null : cameraId,
               timestamp: record.timestamp,
               name: record.name || null,
@@ -509,7 +507,7 @@ export default {
 
         console.log('发送到时空约束分析的数据:', spatiotemporalRequestData)
 
-        // 确保所有数据都有有效的camera_id
+        // 检查是否所有记录都有有效的摄像头ID
         if (spatiotemporalRequestData.records.some(r => r.camera_id === null)) {
           this.$message.warning('部分记录缺少有效的摄像头ID，这可能影响分析结果')
         }
@@ -519,7 +517,7 @@ export default {
 
         if (spatiotemporalResponse.data.status === 'success') {
           // 更新过滤结果为时空约束过滤后的结果
-          this.filterResults = spatiotemporalResponse.data.data.map(record => {
+          const filteredRecords = spatiotemporalResponse.data.data.map(record => {
             return {
               id: record.id,
               student_id: record.student_id,
@@ -534,78 +532,118 @@ export default {
             }
           })
 
+          this.filterResults = filteredRecords
           console.log('时空约束分析后的结果:', this.filterResults)
 
           // 更新时空约束分析进度
           this.reIdProgress.spatialTemporal = 100
           this.$message.success(`时空约束分析完成，保留 ${this.filterResults.length} 条有效记录`)
 
-          // 完成第一阶段后，继续执行ReID处理的其他步骤
+          // 第二步：特征提取
+          this.$message({
+            message: '开始进行特征提取...',
+            type: 'info'
+          })
 
-          // 第二步：准备重识别数据
-          const reidRequestData = {
-            records: this.filterResults,
-            algorithm: this.reIdForm.algorithm,
-            threshold: this.reIdForm.threshold
+          // 准备特征提取请求数据
+          const extractFeaturesRequestData = {
+            records: this.filterResults.map(record => ({
+              id: record.id,
+              student_id: record.student_id,
+              camera_id: record.camera_id,
+              timestamp: record.timestamp,
+              location_x: record.location_x,
+              location_y: record.location_y,
+              name: record.name || `摄像头${record.camera_id}`
+            })),
+            algorithm: this.reIdOptions.algorithm
           }
 
-          // 执行重识别处理
-          const reidResponse = await performReID(reidRequestData)
+          console.log('发送到特征提取的数据:', extractFeaturesRequestData)
 
-          if (reidResponse.data.status === 'success') {
-            // 更新重识别结果
-            this.reIdResults = reidResponse.data.reid_results
-            this.trajectoryRecordIds = reidResponse.data.trajectory
+          // 执行特征提取
+          const extractResponse = await extractFeatures(extractFeaturesRequestData)
 
-            // 自动更新进度
-            this.reIdProgress.crossCamera = 100
-            this.reIdProgress.featureMatching = 100
-            this.reIdProgress.trajectoryIntegration = 100
+          if (extractResponse.data.status === 'success') {
+            // 更新特征提取进度
+            this.reIdProgress.featureMatching = 50
 
-            if (this.reIdResults.length > 0) {
-              this.$message.success(`重识别处理完成，识别出 ${this.reIdResults.length} 条记录`)
+            // 获取提取的特征记录
+            const featuresRecords = extractResponse.data.features_records
+            console.log('特征提取完成，获取到特征记录:', featuresRecords)
+
+            this.$message({
+              message: '特征提取完成，开始进行跨摄像头匹配...',
+              type: 'info'
+            })
+
+            // 第三步：特征匹配
+            const matchFeaturesRequestData = {
+              features_records: featuresRecords,
+              threshold: this.reIdOptions.threshold / 100 // 将百分比转换为0-1的值
+            }
+
+            console.log('发送到特征匹配的数据:', matchFeaturesRequestData)
+
+            // 执行特征匹配
+            const matchResponse = await matchFeatures(matchFeaturesRequestData)
+
+            if (matchResponse.data.status === 'success') {
+              // 更新跨摄像头匹配进度
+              this.reIdProgress.crossCamera = 100
+              this.reIdProgress.featureMatching = 100
+
+              // 更新重识别结果
+              this.reIdResults = matchResponse.data.matched_records.map(record => ({
+                id: record.id,
+                studentId: record.student_id,
+                cameraId: record.camera_id,
+                timestamp: record.timestamp,
+                name: record.name,
+                location_x: record.location_x,
+                location_y: record.location_y,
+                confidence: record.confidence,
+                videoPath: record.video_path,
+                videoStartTime: record.video_start_time,
+                videoEndTime: record.video_end_time
+              }))
+
+              // 第四步：构建最可能的轨迹
+              this.$message({
+                message: '生成最佳轨迹...',
+                type: 'info'
+              })
+
+              if (this.reIdResults.length > 0) {
+                // 按时间排序
+                this.reIdResults.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+
+                // 提取轨迹记录ID
+                this.recordIds = this.reIdResults.map(record => record.id)
+
+                // 轨迹集成完成
+                this.reIdProgress.trajectoryIntegration = 100
+
+                this.$message.success(`重识别完成，找到 ${this.reIdResults.length} 条匹配记录`)
+              } else {
+                this.recordIds = []
+                this.reIdProgress.trajectoryIntegration = 100
+                this.$message.warning('重识别处理完成，但未找到匹配记录')
+              }
             } else {
-              this.$message.warning('重识别处理完成，但未找到匹配记录')
+              this.$message.error(matchResponse.data.message || '特征匹配失败')
             }
           } else {
-            this.$message.error(reidResponse.data.message || '重识别处理失败')
+            this.$message.error(extractResponse.data.message || '特征提取失败')
           }
         } else {
           this.$message.error(spatiotemporalResponse.data.message || '时空约束分析失败')
         }
       } catch (error) {
-        console.error('时空约束和重识别处理错误:', error)
-        this.$message.error('处理请求失败，请检查网络连接')
+        console.error('重识别处理错误:', error)
+        this.$message.error('重识别处理失败，请检查网络连接')
       } finally {
         this.isLoading = false
-      }
-    },
-
-    getCameraLocation (cameraId) {
-      const camera = this.cameras.find(c => c.id === cameraId)
-      return camera ? camera.location : `摄像头${cameraId}`
-    },
-
-    async loadTrajectoryData () {
-      try {
-        // 获取轨迹数据
-        const response = await getTrajectory({
-          recordIds: this.recordIds
-        })
-
-        if (response.data.status === 'success') {
-          // 处理轨迹数据，转换成地图组件所需格式
-          this.processTrajectoryData(
-            response.data.trajectory_data,
-            response.data.segments,
-            response.data.anomalies || []
-          )
-        } else {
-          this.$message.error('获取轨迹数据失败: ' + response.data.message)
-        }
-      } catch (error) {
-        console.error('获取轨迹数据错误:', error)
-        this.$message.error('获取轨迹数据失败，请检查网络连接')
       }
     },
 
