@@ -68,7 +68,7 @@
             <el-carousel :interval="4000" type="card" height="200px">
               <el-carousel-item v-for="(item, index) in filterResults" :key="index">
                 <div class="result-item">
-                  <img :src="item.image" class="result-image">
+                  <!--<img :src="item.image" class="result-image"> -->
                   <div class="result-info">
                     <p>摄像头: {{ item.cameraId }}</p>
                     <p>时间: {{ item.timestamp }}</p>
@@ -250,8 +250,8 @@ export default {
       },
       filterResults: [],
       reIdOptions: {
-        algorithm: 'osnet',
-        threshold: 70
+        algorithm: 'mgn',
+        threshold: 80
       },
       reIdProgress: {
         spatialTemporal: 0,
@@ -405,7 +405,8 @@ export default {
           studentId: this.filterForm.studentId || null,
           startTime: this.filterForm.timeRange[0] ? formatLocalTime(new Date(this.filterForm.timeRange[0])) : null,
           endTime: this.filterForm.timeRange[1] ? formatLocalTime(new Date(this.filterForm.timeRange[1])) : null,
-          attributes: {}
+          attributes: {},
+          image_base64: this.filterForm.referenceImage
         }
 
         // 处理属性过滤
@@ -559,6 +560,13 @@ export default {
             algorithm: this.reIdOptions.algorithm
           }
 
+          if (this.filterForm.referenceImage) {
+            extractFeaturesRequestData.records.unshift({
+              id: 'query', // 使用特殊ID标识查询记录
+              image_base64: this.filterForm.referenceImage // 使用已经转为base64的图像数据
+            })
+          }
+
           console.log('发送到特征提取的数据:', extractFeaturesRequestData)
 
           // 执行特征提取
@@ -568,9 +576,13 @@ export default {
             // 更新特征提取进度
             this.reIdProgress.featureMatching = 50
 
-            // 获取提取的特征记录
+            // 获取提取的特征记录和帧特征
             const featuresRecords = extractResponse.data.features_records
+            const allFramesFeatures = extractResponse.data.all_frames_features || {}
+            const queryFeature = extractResponse.data.query_feature
+
             console.log('特征提取完成，获取到特征记录:', featuresRecords)
+            console.log('获取到帧特征数据:', allFramesFeatures)
 
             this.$message({
               message: '特征提取完成，开始进行跨摄像头匹配...',
@@ -579,7 +591,9 @@ export default {
 
             // 第三步：特征匹配
             const matchFeaturesRequestData = {
-              features_records: featuresRecords,
+              records: featuresRecords,
+              all_frames_features: allFramesFeatures,
+              query_feature: queryFeature,
               threshold: this.reIdOptions.threshold / 100 // 将百分比转换为0-1的值
             }
 
@@ -594,19 +608,34 @@ export default {
               this.reIdProgress.featureMatching = 100
 
               // 更新重识别结果
-              this.reIdResults = matchResponse.data.matched_records.map(record => ({
-                id: record.id,
-                studentId: record.student_id,
-                cameraId: record.camera_id,
-                timestamp: record.timestamp,
-                name: record.name,
-                location_x: record.location_x,
-                location_y: record.location_y,
-                confidence: record.confidence,
-                videoPath: record.video_path,
-                videoStartTime: record.video_start_time,
-                videoEndTime: record.video_end_time
-              }))
+              this.reIdResults = matchResponse.data.matched_records.map(record => {
+                // 计算帧级匹配的统计信息
+                const frameMatches = record.matched_frames || []
+                const frameMatchCount = frameMatches.length
+                const avgFrameConfidence = frameMatches.length > 0
+                  ? frameMatches.reduce((sum, frame) => sum + frame.similarity, 0) / frameMatches.length
+                  : 0
+
+                return {
+                  id: record.id,
+                  studentId: record.student_id,
+                  cameraId: record.camera_id,
+                  timestamp: record.timestamp,
+                  name: record.name,
+                  location_x: record.location_x,
+                  location_y: record.location_y,
+                  confidence: record.confidence,
+                  videoPath: record.video_path,
+                  videoStartTime: record.video_start_time,
+                  videoEndTime: record.video_end_time,
+                  frameMatches: frameMatches,
+                  frameMatchCount: frameMatchCount,
+                  avgFrameConfidence: avgFrameConfidence
+                }
+              })
+
+              // 保存原始匹配数据，用于详细查看
+              this.rawMatchData = matchResponse.data.matched_records
 
               // 第四步：构建最可能的轨迹
               this.$message({
@@ -624,7 +653,7 @@ export default {
                 // 轨迹集成完成
                 this.reIdProgress.trajectoryIntegration = 100
 
-                this.$message.success(`重识别完成，找到 ${this.reIdResults.length} 条匹配记录`)
+                this.$message.success(`重识别完成，找到 ${this.reIdResults.length} 条匹配记录，共 ${this.reIdResults.reduce((sum, r) => sum + r.frameMatchCount, 0)} 个匹配帧`)
               } else {
                 this.recordIds = []
                 this.reIdProgress.trajectoryIntegration = 100

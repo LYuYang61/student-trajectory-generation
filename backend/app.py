@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 
 import networkx as nx
+import numpy as np
 import pandas as pd
 from flask_socketio import SocketIO
 import flask
@@ -232,7 +233,6 @@ def analyze_spatiotemporal():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
-# 特征提取端点
 @app.route('/feature_extraction', methods=['POST'])
 def feature_extraction():
     try:
@@ -248,11 +248,84 @@ def feature_extraction():
 
         # 执行特征提取
         reid_processor = ReIDProcessor()
-        features_records = reid_processor.extract_features(records, algorithm, progress_callback)
+        result = reid_processor.extract_features(
+            records,
+            algorithm,
+            progress_callback,
+            save_dir = os.path.join("detecting_results", datetime.now().strftime("%Y%m%d_%H%M%S"))
+        )
+
+        # 处理返回结果
+        if isinstance(result, dict):
+            # 新版本的返回格式，包含记录和帧特征
+            features_records = result.get('records', [])
+            all_frames_features = result.get('all_frames_features', {})
+            query_feature = result.get('query_feature')
+        else:
+            # 旧版本的返回格式，只有记录列表
+            features_records = result
+            all_frames_features = {}
+            query_feature = None
+            # 查找查询特征向量
+            for record in features_records:
+                if record.get('id') == 'query' and 'feature_vector' in record:
+                    query_feature = record['feature_vector']
+                    break
+
+        # 处理记录，确保JSON安全
+        json_safe_records = []
+        for record in features_records:
+            json_safe_record = {}
+            for key, value in record.items():
+                # 跳过图像数据，这些不应该通过JSON返回
+                if key in ['image', 'processed_image', 'extracted_frames']:
+                    continue
+                # 确保feature_vector是列表而非NumPy数组
+                elif key == 'feature_vector' and isinstance(value, np.ndarray):
+                    json_safe_record[key] = value.tolist()
+                # 处理其他NumPy类型
+                elif isinstance(value, np.integer):
+                    json_safe_record[key] = int(value)
+                elif isinstance(value, np.floating):
+                    json_safe_record[key] = float(value)
+                elif isinstance(value, np.ndarray):
+                    json_safe_record[key] = value.tolist()
+                else:
+                    json_safe_record[key] = value
+            json_safe_records.append(json_safe_record)
+
+        # 处理帧特征，确保JSON安全
+        json_safe_frames = {}
+        for camera_id, frames in all_frames_features.items():
+            json_safe_frames[camera_id] = []
+            for frame in frames:
+                json_safe_frame = {}
+                for key, value in frame.items():
+                    if key == 'feature_vector' and isinstance(value, np.ndarray):
+                        json_safe_frame[key] = value.tolist()
+                    elif isinstance(value, np.integer):
+                        json_safe_frame[key] = int(value)
+                    elif isinstance(value, np.floating):
+                        json_safe_frame[key] = float(value)
+                    elif isinstance(value, np.ndarray):
+                        json_safe_frame[key] = value.tolist()
+                    else:
+                        json_safe_frame[key] = value
+                json_safe_frames[camera_id].append(json_safe_frame)
+
+        # 处理查询特征向量
+        json_safe_query = None
+        if query_feature is not None:
+            if isinstance(query_feature, np.ndarray):
+                json_safe_query = query_feature.tolist()
+            else:
+                json_safe_query = query_feature
 
         return jsonify({
             'status': 'success',
-            'features_records': features_records
+            'features_records': json_safe_records,
+            'all_frames_features': json_safe_frames,
+            'query_feature': json_safe_query
         })
 
     except Exception as e:
@@ -260,15 +333,23 @@ def feature_extraction():
         return jsonify({'status': 'error', 'message': f'特征提取错误: {str(e)}'})
 
 
-# 特征匹配端点
 @app.route('/feature_matching', methods=['POST'])
 def feature_matching():
     try:
         data = request.get_json()
-        if not data or 'features_records' not in data:
+        if not data:
+            return jsonify({'status': 'error', 'message': '缺少请求数据'})
+
+        # 检查数据结构
+        if 'features_records' in data:
+            # 旧的数据结构，只有记录列表
+            features_data = {'records': data['features_records']}
+        elif 'records' in data:
+            # 新的数据结构已经包含了记录和帧特征
+            features_data = data
+        else:
             return jsonify({'status': 'error', 'message': '缺少特征记录数据'})
 
-        features_records = data['features_records']
         threshold = data.get('threshold', 0.7)
 
         def progress_callback(stage, percentage):
@@ -277,15 +358,50 @@ def feature_matching():
         # 执行特征匹配
         reid_processor = ReIDProcessor()
         matched_records = reid_processor.match_features(
-            features_records,
-            threshold=0.7,
+            features_data,
+            threshold=threshold,
             callback=progress_callback,
-            save_dir="matching_results"
+            save_dir=os.path.join("matching_results", datetime.now().strftime("%Y%m%d_%H%M%S"))
         )
+
+        # 处理NumPy数组和其他不可JSON序列化的对象
+        json_safe_matches = []
+        for match in matched_records:
+            json_safe_match = {}
+            for key, value in match.items():
+                # 跳过不应该通过JSON返回的大型数据
+                if key in ['image', 'processed_image']:
+                    continue
+                # 处理嵌套的matched_frames列表
+                elif key == 'matched_frames' and isinstance(value, list):
+                    json_safe_frames = []
+                    for frame in value:
+                        json_safe_frame = {}
+                        for frame_key, frame_value in frame.items():
+                            if isinstance(frame_value, np.integer):
+                                json_safe_frame[frame_key] = int(frame_value)
+                            elif isinstance(frame_value, np.floating):
+                                json_safe_frame[frame_key] = float(frame_value)
+                            elif isinstance(frame_value, np.ndarray):
+                                json_safe_frame[frame_key] = frame_value.tolist()
+                            else:
+                                json_safe_frame[frame_key] = frame_value
+                        json_safe_frames.append(json_safe_frame)
+                    json_safe_match[key] = json_safe_frames
+                # 处理NumPy类型
+                elif isinstance(value, np.integer):
+                    json_safe_match[key] = int(value)
+                elif isinstance(value, np.floating):
+                    json_safe_match[key] = float(value)
+                elif isinstance(value, np.ndarray):
+                    json_safe_match[key] = value.tolist()
+                else:
+                    json_safe_match[key] = value
+            json_safe_matches.append(json_safe_match)
 
         return jsonify({
             'status': 'success',
-            'matched_records': matched_records
+            'matched_records': json_safe_matches
         })
 
     except Exception as e:

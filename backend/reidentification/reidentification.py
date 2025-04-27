@@ -1,9 +1,12 @@
 import os
+import traceback
+
 import numpy as np
 import cv2
 import torch
 from PIL import Image
 from torchvision import transforms
+from scipy.spatial.distance import cosine
 import sys
 import logging
 import datetime
@@ -123,6 +126,13 @@ class ReIDProcessor:
 
     def _extract_feature_vector(self, image_data, algorithm='mgn'):
         """从图像中提取特征向量"""
+        # 在 _extract_feature_vector 方法中添加更详细的日志
+        #logger.info(f"输入图像形状: {image_data.shape}")
+        # 保存调试图像到临时文件
+        #debug_path = f"debug_image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+        #cv2.imwrite(debug_path, image_data)
+        #logger.info(f"保存调试图像到: {debug_path}")
+
         logger.info(f"开始使用 {algorithm} 算法提取特征向量")
         try:
             # 加载模型
@@ -507,6 +517,10 @@ class ReIDProcessor:
                 logger.warning("无法获取视频路径，数据库接口未初始化")
 
             features_records = []
+            # 新增: 保存所有帧的特征向量，按照摄像头ID组织
+            all_frames_features = {}
+            query_feature = None
+
             total_records = len(records)
             logger.info(f"总记录数: {total_records}")
 
@@ -520,6 +534,9 @@ class ReIDProcessor:
                     logger.info(f"为记录分配临时ID: {idx}")
 
                 logger.info(f"处理记录ID: {record['id']}")
+
+                # 初始化帧特征数组
+                record_frames_features = []
 
                 # 尝试获取图像数据
                 image_data = None
@@ -579,7 +596,7 @@ class ReIDProcessor:
                             extracted_person_images = person_images  # 保存所有检测到的人物图像
 
                             if person_images:
-                                # 使用第一个检测到的人物图像
+                                # 使用第一个检测到的人物图像作为主要图像
                                 image_data = person_images[0]
                                 logger.info(f"成功从视频中提取人物图像，形状: {image_data.shape}")
                             else:
@@ -609,12 +626,50 @@ class ReIDProcessor:
                     logger.info(f"为记录 {record['id']} 添加了随机特征向量")
                     continue
 
-                # 根据所选算法提取特征
+                # 为主图像提取特征向量
                 logger.info(f"为记录 {record['id']} 提取特征向量，使用算法: {algorithm}")
                 feature_vector = self._extract_feature_vector(image_data, algorithm)
 
                 # 将特征向量添加到记录中
                 record['feature_vector'] = feature_vector.tolist()
+
+                # 如果是查询记录，保存其特征向量
+                if record['id'] == 'query':
+                    query_feature = feature_vector
+                    logger.info("保存查询特征向量")
+
+                # 提取所有检测到的人物图像的特征
+                if extracted_person_images:
+                    logger.info(f"开始为记录 {record['id']} 的所有 {len(extracted_person_images)} 个检测图像提取特征")
+                    camera_id = record.get('camera_id', 'unknown')
+
+                    # 为每个检测到的人物图像提取特征
+                    for i, person_img in enumerate(extracted_person_images):
+                        try:
+                            person_feature = self._extract_feature_vector(person_img, algorithm)
+                            if person_feature is not None:
+                                frame_info = {
+                                    'frame_index': i,
+                                    'feature_vector': person_feature.tolist(),
+                                    'record_id': record['id'],
+                                    'camera_id': camera_id,
+                                    'timestamp': record.get('timestamp', '')
+                                }
+                                record_frames_features.append(frame_info)
+                                logger.info(f"成功为记录 {record['id']} 的第 {i + 1} 个人物图像提取特征")
+                            else:
+                                logger.warning(f"记录 {record['id']} 的第 {i + 1} 个人物图像特征提取失败")
+                        except Exception as e:
+                            logger.error(f"为记录 {record['id']} 的第 {i + 1} 个人物图像提取特征时出错: {str(e)}")
+
+                # 将帧特征按摄像头ID组织
+                if record_frames_features:
+                    camera_id = record.get('camera_id', 'unknown')
+                    if camera_id not in all_frames_features:
+                        all_frames_features[camera_id] = []
+                    all_frames_features[camera_id].extend(record_frames_features)
+                    logger.info(f"为摄像头 {camera_id} 添加了 {len(record_frames_features)} 个帧特征")
+
                 features_records.append(record)
                 logger.info(f"记录 {record['id']} 特征提取完成")
 
@@ -624,8 +679,28 @@ class ReIDProcessor:
                     logger.info(f"特征提取进度: {progress}%")
                     callback('featureMatching', progress // 2)  # 前半部分进度
 
+            # 处理可序列化性
+            for record in features_records:
+                if 'feature_vector' in record and isinstance(record['feature_vector'], np.ndarray):
+                    record['feature_vector'] = record['feature_vector'].tolist()
+
+                # 删除无法序列化的图像数据
+                for key in ['image', 'processed_image', 'extracted_frames']:
+                    if key in record:
+                        del record[key]
+
+            # 添加所有帧的特征结果到返回值
+            result = {
+                'records': features_records,
+                'all_frames_features': all_frames_features,
+                'query_feature': query_feature.tolist() if query_feature is not None else None
+            }
+
             logger.info(f"特征提取完成，处理了 {len(features_records)} 条记录")
-            return features_records
+            logger.info(
+                f"共收集了 {sum(len(frames) for frames in all_frames_features.values())} 个帧特征，来自 {len(all_frames_features)} 个摄像头")
+
+            return result
 
         except Exception as e:
             import traceback
@@ -638,7 +713,7 @@ class ReIDProcessor:
         对特征向量进行相似度匹配，并保存匹配结果图像
 
         Args:
-            records: 包含特征向量的记录列表
+            records: 包含特征向量的记录列表和帧特征数据
             threshold: 相似度阈值，低于此值的匹配将被忽略
             callback: 进度回调函数
             save_dir: 保存匹配结果图像的目录路径
@@ -647,12 +722,17 @@ class ReIDProcessor:
             匹配结果列表
         """
         try:
-            from scipy.spatial.distance import cosine
-            import traceback
-            import os
+            logger.info(f"开始特征匹配")
             import cv2
 
-            logger.info(f"开始特征匹配，记录数量: {len(records)}")
+            # 解析输入数据
+            features_records = records.get('records', [])
+            all_frames_features = records.get('all_frames_features', {})
+            query_feature = records.get('query_feature')
+
+            logger.info(f"特征匹配输入: {len(features_records)} 条记录, {len(all_frames_features)} 个摄像头")
+            if query_feature is None:
+                logger.warning("没有提供查询特征向量，将从记录中查找")
 
             # 创建保存目录
             if save_dir is None:
@@ -662,257 +742,243 @@ class ReIDProcessor:
                 os.makedirs(save_dir, exist_ok=True)
                 logger.info(f"匹配结果将保存到: {save_dir}")
 
-            # 提取所有有效的特征向量
-            logger.info("提取所有特征向量")
-            feature_vectors = []
-            valid_indices = []
-            record_ids = []
-            expected_dim = 2048  # 统一使用2048维特征向量
+            # 查找查询记录的特征向量和图像
+            query_image = None
+            if query_feature is None:
+                for record in features_records:
+                    if record.get('id') == 'query' and 'feature_vector' in record:
+                        query_feature = record['feature_vector']
+                        # 如果有图像数据，保存查询图像
+                        if 'image' in record and record['image'] is not None:
+                            query_image = record['image']
+                            if isinstance(query_image, str) and query_image.startswith('data:image'):
+                                # 处理base64编码的图像
+                                import base64
+                                query_image = query_image.split(',')[1]
+                                query_image = base64.b64decode(query_image)
+                                query_image = np.frombuffer(query_image, dtype=np.uint8)
+                                query_image = cv2.imdecode(query_image, cv2.IMREAD_COLOR)
 
-            for i, record in enumerate(records):
-                if 'feature_vector' in record and record['feature_vector'] is not None:
-                    feature_vector = record['feature_vector']
-                    # 统一特征向量维度
-                    if len(feature_vector) != expected_dim:
-                        logger.warning(
-                            f"记录 {record['id']} 的特征向量维度为 {len(feature_vector)}，需要调整为 {expected_dim}")
-                        if len(feature_vector) < expected_dim:
-                            # 如果维度不足，填充零
-                            padded_vector = np.zeros(expected_dim)
-                            padded_vector[:len(feature_vector)] = feature_vector
-                            feature_vector = padded_vector
-                        else:
-                            # 如果维度过大，截断
-                            feature_vector = feature_vector[:expected_dim]
+                            query_image_path = os.path.join(save_dir, "query_image.jpg")
+                            cv2.imwrite(query_image_path, query_image)
+                            logger.info(f"保存查询图像: {query_image_path}")
 
-                    feature_vectors.append(feature_vector)
-                    valid_indices.append(i)
-                    record_ids.append(record['id'])
+                        logger.info("从记录中找到查询特征向量")
+                        break
 
-            logger.info(f"提取了 {len(feature_vectors)} 个特征向量")
-
-            if len(feature_vectors) == 0:
+            if query_feature is None:
+                logger.error("未找到查询特征向量，无法进行匹配")
                 return []
 
-            # 计算距离矩阵
-            logger.info("计算特征向量距离矩阵")
-            matches = []
+            # 将查询特征转换为numpy数组
+            if isinstance(query_feature, list):
+                query_feature = np.array(query_feature)
 
-            for i in range(len(feature_vectors)):
-                # 如果是query记录，则与其他所有记录比较
-                if record_ids[i] == 'query':
-                    query_idx = i
-                    query_record = records[valid_indices[i]]
+            # 匹配主记录
+            logger.info("开始匹配主记录")
+            main_matches = []
+            total_records = len(features_records)
 
-                    # 确保查询图像可用
-                    query_image = None
-                    if 'processed_image' in query_record:
-                        query_image = query_record['processed_image']
+            for i, record in enumerate(features_records):
+                if record.get('id') == 'query':
+                    continue  # 跳过查询记录
 
-                    # 总比较数量用于计算进度
-                    total_comparisons = len(feature_vectors) - 1
+                try:
+                    if 'feature_vector' in record:
+                        feature_vector = record['feature_vector']
+                        if isinstance(feature_vector, list):
+                            feature_vector = np.array(feature_vector)
 
-                    for j in range(len(feature_vectors)):
-                        if i != j:  # 不与自身比较
-                            try:
-                                # 计算余弦距离
-                                dist = cosine(feature_vectors[i], feature_vectors[j])
-                                similarity = 1 - dist  # 转换为相似度
+                        # 计算相似度
+                        similarity = 1 - cosine(query_feature, feature_vector)
 
-                                # 仅当相似度高于阈值时，保存匹配信息和图像
-                                if similarity > threshold:
-                                    match_record = records[valid_indices[j]]
-                                    match_info = {
-                                        'query_id': record_ids[i],
-                                        'match_id': record_ids[j],
+                        if similarity > threshold:
+                            match_info = {
+                                'id': record.get('id'),
+                                'camera_id': record.get('camera_id', 'unknown'),
+                                'timestamp': record.get('timestamp', ''),
+                                'student_id': record.get('student_id', ''),
+                                'name': record.get('name', ''),
+                                'location_x': record.get('location_x', 0),
+                                'location_y': record.get('location_y', 0),
+                                'confidence': float(similarity),
+                                'video_path': record.get('video_path', ''),
+                                'video_start_time': record.get('video_start_time', ''),
+                                'video_end_time': record.get('video_end_time', ''),
+                                'matched_frames': []  # 用于存储匹配的帧信息
+                            }
+                            main_matches.append(match_info)
+                            logger.info(f"找到主记录匹配: ID={record.get('id')}, 相似度={similarity}")
+
+                            # 保存主记录图像(如果有)
+                            if 'processed_image' in record and record['processed_image'] is not None:
+                                record_image = record['processed_image']
+                                if isinstance(record_image, np.ndarray):
+                                    # 添加标注信息
+                                    img_with_info = record_image.copy()
+                                    text = f"ID: {record.get('id')}, 相似度: {similarity:.2f}"
+                                    cv2.putText(img_with_info, text, (10, 30),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+                                    # 保存图像（添加相似度到文件名）
+                                    record_img_path = os.path.join(save_dir,
+                                                                   f"record_{record.get('id')}_sim_{similarity:.4f}.jpg")
+                                    cv2.imwrite(record_img_path, img_with_info)
+                                    logger.info(f"保存匹配记录图像: {record_img_path}")
+                            elif 'image' in record and record['image'] is not None:
+                                record_image = record['image']
+                                if isinstance(record_image, np.ndarray):
+                                    # 添加标注信息
+                                    img_with_info = record_image.copy()
+                                    text = f"ID: {record.get('id')}, 相似度: {similarity:.2f}"
+                                    cv2.putText(img_with_info, text, (10, 30),
+                                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+                                    # 保存图像（添加相似度到文件名）
+                                    record_img_path = os.path.join(save_dir,
+                                                                   f"record_{record.get('id')}_sim_{similarity:.4f}.jpg")
+                                    cv2.imwrite(record_img_path, img_with_info)
+                                    logger.info(f"保存匹配记录图像: {record_img_path}")
+                except Exception as e:
+                    logger.error(f"匹配记录 {record.get('id')} 时出错: {str(e)}")
+
+                # 更新进度
+                if callback:
+                    progress = int((i + 1) / total_records * 100)
+                    callback('featureMatching', 50 + progress // 2)  # 后半部分进度
+
+            # 匹配帧级特征
+            logger.info(f"开始匹配各摄像头的帧级特征，共 {len(all_frames_features)} 个摄像头")
+
+            for camera_id, frames in all_frames_features.items():
+                logger.info(f"处理摄像头 {camera_id} 的 {len(frames)} 个帧特征")
+
+                # 为该摄像头创建单独的保存目录
+                camera_save_dir = os.path.join(save_dir, f"camera_{camera_id}")
+                os.makedirs(camera_save_dir, exist_ok=True)
+
+                # 为每个帧计算与查询特征的相似度
+                for frame_info in frames:
+                    try:
+                        frame_feature = frame_info.get('feature_vector')
+                        if frame_feature:
+                            if isinstance(frame_feature, list):
+                                frame_feature = np.array(frame_feature)
+
+                            # 计算相似度
+                            similarity = 1 - cosine(query_feature, frame_feature)
+
+                            if similarity > threshold:
+                                # 找到对应的主记录
+                                record_id = frame_info.get('record_id')
+                                matched_record = next((r for r in main_matches if r.get('id') == record_id), None)
+
+                                # 如果找不到对应的主记录，可能是因为主记录相似度低于阈值
+                                # 在这种情况下，我们仍然保留高相似度的帧
+                                if matched_record is None:
+                                    # 查找原始记录
+                                    original_record = next((r for r in features_records if r.get('id') == record_id),
+                                                           None)
+
+                                    if original_record:
+                                        # 创建一个新的主匹配记录
+                                        matched_record = {
+                                            'id': record_id,
+                                            'camera_id': camera_id,
+                                            'timestamp': original_record.get('timestamp',
+                                                                             frame_info.get('timestamp', '')),
+                                            'student_id': original_record.get('student_id', ''),
+                                            'name': original_record.get('name', ''),
+                                            'location_x': original_record.get('location_x', 0),
+                                            'location_y': original_record.get('location_y', 0),
+                                            'confidence': float(similarity),  # 使用这个帧的相似度
+                                            'video_path': original_record.get('video_path', ''),
+                                            'video_start_time': original_record.get('video_start_time', ''),
+                                            'video_end_time': original_record.get('video_end_time', ''),
+                                            'matched_frames': []  # 用于存储匹配的帧信息
+                                        }
+                                        main_matches.append(matched_record)
+                                        logger.info(f"基于帧匹配创建新的主记录: ID={record_id}, 相似度={similarity}")
+
+                                # 添加匹配的帧信息
+                                if matched_record:
+                                    frame_match = {
+                                        'frame_index': frame_info.get('frame_index', 0),
                                         'similarity': float(similarity),
-                                        'camera_id': match_record.get('camera_id', 'unknown'),
-                                        'timestamp': match_record.get('timestamp', ''),
-                                        'video_path': match_record.get('video_path', ''),
-                                        'location_x': match_record.get('location_x', 0),
-                                        'location_y': match_record.get('location_y', 0),
+                                        'camera_id': camera_id,
+                                        'timestamp': frame_info.get('timestamp', '')
                                     }
+                                    matched_record['matched_frames'].append(frame_match)
+                                    logger.info(
+                                        f"添加帧匹配: 记录ID={record_id}, 帧索引={frame_info.get('frame_index')}, 相似度={similarity}")
 
-                                    # 添加所有其他字段（除了大型数据）
-                                    for k, v in match_record.items():
-                                        if k not in ['feature_vector', 'image', 'processed_image', 'extracted_frames']:
-                                            match_info[k] = v
+                                    # 保存匹配的帧图像
+                                    if 'image' in frame_info and frame_info['image'] is not None:
+                                        frame_image = frame_info['image']
+                                        if isinstance(frame_image, np.ndarray):
+                                            # 添加标注信息
+                                            img_with_info = frame_image.copy()
+                                            text = f"ID: {record_id}, 帧: {frame_info.get('frame_index')}, 相似度: {similarity:.2f}"
+                                            cv2.putText(img_with_info, text, (10, 30),
+                                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-                                    # 保存匹配图像到指定目录
-                                    if save_dir:
-                                        # 保存主要匹配图像
-                                        match_image = None
-                                        if 'processed_image' in match_record:
-                                            match_image = match_record['processed_image']
-                                        elif 'extracted_frames' in match_record and match_record['extracted_frames']:
-                                            match_image = match_record['extracted_frames'][0]
+                                            # 绘制矩形框，如果有边界框信息
+                                            if 'bbox' in frame_info and len(frame_info['bbox']) == 4:
+                                                x, y, w, h = frame_info['bbox']
+                                                cv2.rectangle(img_with_info, (x, y), (x + w, y + h), (0, 255, 0), 2)
 
-                                        if match_image is not None:
-                                            # 为匹配图像创建文件名
-                                            match_filename = f"match_{record_ids[j]}_sim{similarity:.4f}.jpg"
-                                            match_path = os.path.join(save_dir, match_filename)
+                                            # 保存图像（添加相似度到文件名）
+                                            frame_img_path = os.path.join(
+                                                camera_save_dir,
+                                                f"match_{record_id}_frame_{frame_info.get('frame_index')}_sim_{similarity:.4f}.jpg"
+                                            )
+                                            cv2.imwrite(frame_img_path, img_with_info)
+                                            logger.info(f"保存匹配帧图像: {frame_img_path}")
+                    except Exception as e:
+                        import traceback
+                        logger.error(f"匹配帧特征时出错: {str(e)}")
+                        logger.error(traceback.format_exc())
 
-                                            # 保存图像
-                                            cv2.imwrite(match_path, match_image)
-                                            logger.info(f"保存匹配图像: {match_path}, 相似度: {similarity:.4f}")
-                                            match_info['match_image_path'] = match_path
+            # 对匹配结果按相似度排序
+            main_matches.sort(key=lambda x: x['confidence'], reverse=True)
 
-                                        # 如果有提取的帧，仅保存匹配度高的图像帧
-                                        if 'extracted_frames' in match_record and match_record['extracted_frames']:
-                                            saved_frames = []
-                                            # 为每个帧创建单独的特征向量并计算相似度
-                                            for frame_idx, frame in enumerate(match_record['extracted_frames']):
-                                                # 使用已加载的模型为每个帧提取特征
-                                                try:
-                                                    frame_feature = self._extract_feature_vector(frame, 'mgn')
-                                                    if frame_feature is not None:
-                                                        # 计算与查询特征的相似度
-                                                        frame_dist = cosine(feature_vectors[i], frame_feature)
-                                                        frame_similarity = 1 - frame_dist
+            # 对每个记录中的帧匹配也按相似度排序
+            for match in main_matches:
+                if 'matched_frames' in match and match['matched_frames']:
+                    match['matched_frames'].sort(key=lambda x: x['similarity'], reverse=True)
 
-                                                        # 只保存相似度高于阈值的帧
-                                                        if frame_similarity > threshold:
-                                                            frame_filename = f"match_{record_ids[j]}_frame{frame_idx}_sim{frame_similarity:.4f}.jpg"
-                                                            frame_path = os.path.join(save_dir, frame_filename)
-                                                            cv2.imwrite(frame_path, frame)
-                                                            saved_frames.append({
-                                                                'path': frame_path,
-                                                                'similarity': float(frame_similarity)
-                                                            })
-                                                            logger.info(
-                                                                f"保存匹配帧: {frame_path}, 相似度: {frame_similarity:.4f}")
-                                                except Exception as fe:
-                                                    logger.warning(f"为帧 {frame_idx} 提取特征时出错: {str(fe)}")
-                                                    continue
+            logger.info(f"特征匹配完成，共找到 {len(main_matches)} 条主记录匹配")
 
-                                            if saved_frames:
-                                                match_info['matched_frames'] = saved_frames
-                                                logger.info(
-                                                    f"为匹配 {record_ids[j]} 保存了 {len(saved_frames)} 个相似帧")
+            # 生成简单的匹配结果网页，方便查看
+            if main_matches and save_dir:
+                html_path = os.path.join(save_dir, "matching_results.html")
+                try:
+                    with open(html_path, "w", encoding="utf-8") as f:
+                        f.write("<html><head><title>匹配结果</title>")
+                        f.write("<style>body{font-family:sans-serif;} table{border-collapse:collapse;width:100%}")
+                        f.write(
+                            "td,th{border:1px solid #ddd;padding:8px;} tr:nth-child(even){background-color:#f2f2f2}")
+                        f.write("</style></head><body>")
+                        f.write(f"<h1>匹配结果 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</h1>")
+                        f.write(
+                            "<table><tr><th>ID</th><th>相似度</th><th>摄像头</th><th>时间</th><th>匹配帧数</th></tr>")
 
-                                    matches.append(match_info)
-                                    logger.info(f"找到匹配: ID={match_record.get('id')}, 相似度={similarity:.4f}")
+                        for match in main_matches:
+                            f.write(f"<tr><td>{match.get('id')}</td>")
+                            f.write(f"<td>{match.get('confidence', 0):.4f}</td>")
+                            f.write(f"<td>{match.get('camera_id', 'unknown')}</td>")
+                            f.write(f"<td>{match.get('timestamp', '')}</td>")
+                            f.write(f"<td>{len(match.get('matched_frames', []))}</td></tr>")
 
-                                # 更新进度
-                                if callback and total_comparisons > 0:
-                                    progress = int((j + (1 if j > i else 0)) / total_comparisons * 100)
-                                    callback("特征匹配", progress)
-                                    logger.info(f"特征匹配: {progress}%")
+                        f.write("</table></body></html>")
+                    logger.info(f"生成匹配结果网页: {html_path}")
+                except Exception as e:
+                    logger.error(f"生成匹配结果网页失败: {str(e)}")
 
-                            except Exception as e:
-                                logger.error(f"计算记录 {record_ids[i]} 和 {record_ids[j]} 的相似度时出错: {str(e)}")
-                                logger.error(traceback.format_exc())
-
-            # 按相似度从高到低排序
-            matches.sort(key=lambda x: x['similarity'], reverse=True)
-
-            # 打印匹配结果
-            logger.info(f"特征匹配完成，找到 {len(matches)} 个匹配")
-            for idx, match in enumerate(matches):
-                logger.info(f"匹配 #{idx + 1}:")
-                logger.info(f"  摄像头ID: {match['camera_id']}")
-                logger.info(f"  时间戳: {match['timestamp']}")
-                logger.info(f"  视频路径: {match['video_path']}")
-                logger.info(f"  相似度: {match['similarity']:.4f}")
-                if 'match_image_path' in match:
-                    logger.info(f"  匹配图像保存路径: {match['match_image_path']}")
-                if 'matched_frames' in match:
-                    logger.info(f"  匹配帧数量: {len(match['matched_frames'])}")
-                logger.info("---")
-
-            return matches
+            return main_matches
 
         except Exception as e:
+            import traceback
             logger.error(f"特征匹配过程中出错: {str(e)}")
             logger.error(traceback.format_exc())
-            raise Exception(f"特征匹配时出错: {str(e)}")
-
-def load_image_safe(image_path_or_data):
-    """安全加载图像，支持路径字符串或直接的图像数据"""
-    try:
-        if isinstance(image_path_or_data, str):
-            # 如果是路径字符串，从文件加载
-            if os.path.exists(image_path_or_data):
-                img = cv2.imread(image_path_or_data)
-                if img is not None:
-                    logger.info(f"图像加载成功: {image_path_or_data}, 形状: {img.shape}")
-                    return img, True
-                else:
-                    logger.warning(f"无法加载图像: {image_path_or_data}")
-                    return None, False
-            else:
-                logger.warning(f"图像路径不存在: {image_path_or_data}")
-                return None, False
-        elif isinstance(image_path_or_data, np.ndarray):
-            # 如果已经是图像数据，直接返回
-            logger.info(f"使用已提供的图像数据，形状: {image_path_or_data.shape}")
-            return image_path_or_data, True
-        else:
-            # 不支持的类型
-            logger.warning(f"不支持的图像数据类型: {type(image_path_or_data)}")
-            return None, False
-    except Exception as e:
-        logger.warning(f"图像加载异常: {e}")
-        return None, False
-
-
-def main():
-    """主函数，用于演示ReIDProcessor的使用"""
-    logger.info("开始演示ReIDProcessor")
-
-    # 初始化ReIDProcessor
-    processor = ReIDProcessor()
-    image_path = "D:/lyycode02/student-trajectory-generation/frontend/public/2.jpg"
-
-    # 加载测试图像
-    query_image, success = load_image_safe(image_path)
-    if not success:
-        logger.warning(f"无法加载图像: {image_path}，使用默认图像")
-        query_image = np.ones((384, 128, 3), dtype=np.uint8) * 200
-    else:
-        logger.info(f"成功加载查询图像，形状: {query_image.shape}")
-
-    # 创建测试记录
-    test_records = []
-    for i in range(5):
-        record = {
-            'id': f'test_{i}',
-            'camera_id': i + 1,
-            'timestamp': datetime.now() - timedelta(minutes=i * 10),
-            'location_x': 100 + i * 10,
-            'location_y': 200 + i * 5
-        }
-        test_records.append(record)
-
-    try:
-        logger.info("开始提取特征")
-        query_record = {'id': 'query', 'image': query_image}  # 明确设置image字段
-
-        features_records = processor.extract_features(
-            [query_record] + test_records,
-            algorithm='mgn',
-            callback=lambda stage, progress: logger.info(f"{stage}: {progress:.1f}%"),
-            save_dir = os.path.join("detecting_results", datetime.now().strftime("%Y%m%d_%H%M%S"))
-        )
-
-        # 检查特征向量维度
-        for record in features_records:
-            if 'feature_vector' in record and record['feature_vector'] is not None:
-                logger.info(f"记录 {record['id']} 的特征向量维度: {len(record['feature_vector'])}")
-
-        # 匹配特征
-        logger.info("开始特征匹配")
-        matched_records = processor.match_features(
-            features_records,
-            threshold=0.8,
-            callback=lambda stage, progress: logger.info(f"{stage}: {progress:.1f}%")
-        )
-
-        logger.info(f"匹配结果数量: {len(matched_records)}")
-
-    except Exception as e:
-        logger.error(f"演示过程中出错: {str(e)}", exc_info=True)
-
-
-if __name__ == "__main__":
-    main()
+            return []
