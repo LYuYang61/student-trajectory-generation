@@ -5,10 +5,10 @@
       <span>轨迹可视化</span>
     </div>
 
-    <el-steps :active="activeStep" finish-status="success" class="steps-container">
-      <el-step title="身份和属性过滤"></el-step>
-      <el-step title="重识别处理"></el-step>
-      <el-step title="轨迹可视化"></el-step>
+    <el-steps :active="activeStep" finish-status="success" class="steps-container" align-center>
+      <el-step title="身份和属性过滤" class="custom-step"></el-step>
+      <el-step title="重识别处理" class="custom-step"></el-step>
+      <el-step title="轨迹可视化" class="custom-step"></el-step>
     </el-steps>
 
     <!-- Step 1: Identity and Attribute Filtering -->
@@ -483,6 +483,67 @@ export default {
         trajectoryIntegration: 0
       }
 
+      // 平滑动画相关参数
+      const animationSpeed = {
+        fast: 10, // 快速任务每步增加的百分比
+        slow: 2 // 缓慢任务每步增加的百分比
+      }
+      let animationIntervals = {
+        spatialTemporal: null,
+        crossCamera: null,
+        featureMatching: null,
+        trajectoryIntegration: null
+      }
+
+      // 创建进度条动画函数
+      const animateProgress = (progressKey, targetValue, isSlowTask = false) => {
+        // 如果已有动画正在进行，先清除
+        if (animationIntervals[progressKey]) {
+          clearInterval(animationIntervals[progressKey])
+        }
+
+        const step = isSlowTask ? animationSpeed.slow : animationSpeed.fast
+        // 最大值设为目标值-1，留出后端完成时的最后一步
+        const maxAnimationValue = isSlowTask ? Math.min(targetValue, 85) : targetValue - 5
+
+        animationIntervals[progressKey] = setInterval(() => {
+          if (this.reIdProgress[progressKey] >= maxAnimationValue) {
+            clearInterval(animationIntervals[progressKey])
+            animationIntervals[progressKey] = null
+          } else {
+            this.reIdProgress[progressKey] += step
+          }
+        }, 100)
+
+        // 返回一个用于完成进度的函数
+        return () => {
+          if (animationIntervals[progressKey]) {
+            clearInterval(animationIntervals[progressKey])
+            animationIntervals[progressKey] = null
+          }
+
+          // 平滑过渡到目标值
+          const finalAnimation = setInterval(() => {
+            if (this.reIdProgress[progressKey] >= targetValue) {
+              this.reIdProgress[progressKey] = targetValue
+              clearInterval(finalAnimation)
+            } else {
+              this.reIdProgress[progressKey] += Math.max(1, (targetValue - this.reIdProgress[progressKey]) / 3)
+            }
+          }, 80)
+        }
+      }
+
+      // 清除所有动画
+      const clearAllAnimations = () => {
+        Object.keys(animationIntervals).forEach(key => {
+          if (animationIntervals[key]) {
+            clearInterval(animationIntervals[key])
+            animationIntervals[key] = null
+          }
+        })
+      }
+
       this.isLoading = true
       this.$message({
         message: '开始进行时空约束分析...',
@@ -490,6 +551,9 @@ export default {
       })
 
       try {
+        // 开始时空约束分析动画
+        const completeSpatialTemporalProgress = animateProgress('spatialTemporal', 100)
+
         // 第一步：时空约束分析
         const spatiotemporalRequestData = {
           records: this.filterResults.map(record => {
@@ -537,172 +601,212 @@ export default {
           this.filterResults = filteredRecords
           console.log('时空约束分析后的结果:', this.filterResults)
 
-          // 更新时空约束分析进度
-          this.reIdProgress.spatialTemporal = 100
-          this.$message.success(`时空约束分析完成，保留 ${this.filterResults.length} 条有效记录`)
+          // 完成时空约束分析进度
+          completeSpatialTemporalProgress()
 
-          // 第二步：特征提取
-          this.$message({
-            message: '开始进行特征提取...',
-            type: 'info'
-          })
+          // 确保时空约束分析进度显示100%后再显示下一步提示信息
+          setTimeout(() => {
+            this.$message.success(`时空约束分析完成，保留 ${this.filterResults.length} 条有效记录`)
 
-          // 准备特征提取请求数据
-          const extractFeaturesRequestData = {
-            records: this.filterResults.map(record => ({
-              id: record.id,
-              student_id: record.student_id,
-              camera_id: record.camera_id,
-              timestamp: record.timestamp,
-              location_x: record.location_x,
-              location_y: record.location_y,
-              name: record.name || `摄像头${record.camera_id}`
-            })),
-            algorithm: this.reIdOptions.algorithm
-          }
-
-          if (this.filterForm.referenceImage) {
-            extractFeaturesRequestData.records.unshift({
-              id: 'query', // 使用特殊ID标识查询记录
-              image_base64: this.filterForm.referenceImage // 使用已经转为base64的图像数据
-            })
-          }
-
-          console.log('发送到特征提取的数据:', extractFeaturesRequestData)
-
-          // 执行特征提取
-          const extractResponse = await extractFeatures(extractFeaturesRequestData)
-
-          if (extractResponse.data.status === 'success') {
-            // 更新特征提取进度
-            this.reIdProgress.featureMatching = 50
-
-            // 获取提取的特征记录和帧特征
-            const featuresRecords = extractResponse.data.features_records
-            const allFramesFeatures = extractResponse.data.all_frames_features || {}
-            const queryFeature = extractResponse.data.query_feature
-
-            console.log('特征提取完成，获取到特征记录:', featuresRecords)
-            console.log('获取到帧特征数据:', allFramesFeatures)
-
+            // 第二步：特征提取
             this.$message({
-              message: '特征提取完成，开始进行跨摄像头匹配...',
+              message: '开始进行特征提取...',
               type: 'info'
             })
 
-            // 第三步：特征匹配
-            const matchFeaturesRequestData = {
-              records: featuresRecords,
-              all_frames_features: allFramesFeatures,
-              query_feature: queryFeature,
-              threshold: this.reIdOptions.threshold / 100 // 将百分比转换为0-1的值
+            // 开始特征提取进度动画（慢速）
+            // const completeFeatureMatchingProgress = animateProgress('featureMatching', 100, true)
+
+            // 准备特征提取请求数据
+            const extractFeaturesRequestData = {
+              records: this.filterResults.map(record => ({
+                id: record.id,
+                student_id: record.student_id,
+                camera_id: record.camera_id,
+                timestamp: record.timestamp,
+                location_x: record.location_x,
+                location_y: record.location_y,
+                name: record.name || `摄像头${record.camera_id}`
+              })),
+              algorithm: this.reIdOptions.algorithm
             }
 
-            console.log('发送到特征匹配的数据:', matchFeaturesRequestData)
-
-            // 执行特征匹配
-            const matchResponse = await matchFeatures(matchFeaturesRequestData)
-
-            if (matchResponse.data.status === 'success') {
-              // 更新跨摄像头匹配进度
-              this.reIdProgress.crossCamera = 100
-              this.reIdProgress.featureMatching = 100
-
-              // 更新重识别结果
-              this.reIdResults = matchResponse.data.matched_records.map(record => {
-                // 计算帧级匹配的统计信息
-                const frameMatches = record.matched_frames || []
-                const frameMatchCount = frameMatches.length
-                const avgFrameConfidence = frameMatches.length > 0
-                  ? frameMatches.reduce((sum, frame) => sum + frame.similarity, 0) / frameMatches.length
-                  : 0
-
-                return {
-                  id: record.id,
-                  studentId: record.student_id,
-                  cameraId: record.camera_id,
-                  timestamp: record.timestamp,
-                  name: record.name,
-                  location_x: record.location_x,
-                  location_y: record.location_y,
-                  confidence: record.confidence,
-                  videoPath: record.video_path || null,
-                  videoStartTime: record.video_start_time || null,
-                  videoEndTime: record.video_end_time || null,
-                  frameMatches: frameMatches,
-                  frameMatchCount: frameMatchCount,
-                  avgFrameConfidence: avgFrameConfidence
-                }
+            if (this.filterForm.referenceImage) {
+              extractFeaturesRequestData.records.unshift({
+                id: 'query', // 使用特殊ID标识查询记录
+                image_base64: this.filterForm.referenceImage // 使用已经转为base64的图像数据
               })
+            }
 
-              // 保存原始匹配数据，用于详细查看
-              this.rawMatchData = matchResponse.data.matched_records
+            console.log('发送到特征提取的数据:', extractFeaturesRequestData)
 
-              // 第四步：构建最可能的轨迹
-              this.$message({
-                message: '生成最佳轨迹...',
-                type: 'info'
-              })
+            // 执行特征提取
+            extractFeatures(extractFeaturesRequestData).then(extractResponse => {
+              if (extractResponse.data.status === 'success') {
+                // 完成特征提取进度
+                // completeFeatureMatchingProgress()
 
-              if (this.reIdResults.length > 0) {
-                // 按时间排序
-                this.reIdResults.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+                // 获取提取的特征记录和帧特征
+                const featuresRecords = extractResponse.data.features_records
+                const allFramesFeatures = extractResponse.data.all_frames_features || {}
+                const queryFeature = extractResponse.data.query_feature
 
-                // 提取轨迹记录ID
-                this.recordIds = this.reIdResults.map(record => record.id)
+                console.log('特征提取完成，获取到特征记录:', featuresRecords)
+                console.log('获取到帧特征数据:', allFramesFeatures)
 
-                // 使用重识别结果生成轨迹数据
-                // 构建轨迹数据格式
-                const trajectoryData = this.reIdResults.map(record => ({
-                  id: record.id,
-                  camera_id: record.cameraId,
-                  timestamp: record.timestamp,
-                  location_x: record.location_x,
-                  location_y: record.location_y,
-                  name: record.name || `摄像头${record.cameraId}`
-                }))
-
-                // 简单模拟轨迹段，连接相邻摄像头点
-                const segments = []
-                for (let i = 0; i < trajectoryData.length - 1; i++) {
-                  segments.push({
-                    start_location: [trajectoryData[i].location_x, trajectoryData[i].location_y],
-                    end_location: [trajectoryData[i + 1].location_x, trajectoryData[i + 1].location_y],
-                    start_camera_id: trajectoryData[i].camera_id,
-                    end_camera_id: trajectoryData[i + 1].camera_id,
-                    start_time: trajectoryData[i].timestamp,
-                    end_time: trajectoryData[i + 1].timestamp
+                // 确保特征提取进度完成后再显示下一步
+                setTimeout(() => {
+                  this.$message({
+                    message: '特征提取完成，开始进行跨摄像头匹配...',
+                    type: 'info'
                   })
-                }
 
-                // 暂无异常点数据
-                const anomalies = []
+                  // 开始跨摄像头匹配进度动画
+                  const completeCrossCameraProgress = animateProgress('crossCamera', 100)
 
-                // 处理轨迹数据
-                this.processTrajectoryData(trajectoryData, segments, anomalies)
+                  // 第三步：特征匹配
+                  const matchFeaturesRequestData = {
+                    records: featuresRecords,
+                    all_frames_features: allFramesFeatures,
+                    query_feature: queryFeature,
+                    threshold: this.reIdOptions.threshold / 100 // 将百分比转换为0-1的值
+                  }
 
-                // 轨迹集成完成
-                this.reIdProgress.trajectoryIntegration = 100
+                  console.log('发送到特征匹配的数据:', matchFeaturesRequestData)
 
-                this.$message.success(`重识别完成，找到 ${this.reIdResults.length} 条匹配记录，共 ${this.reIdResults.reduce((sum, r) => sum + r.frameMatchCount, 0)} 个匹配帧`)
+                  // 执行特征匹配
+                  matchFeatures(matchFeaturesRequestData).then(matchResponse => {
+                    if (matchResponse.data.status === 'success') {
+                      // 完成跨摄像头匹配进度
+                      completeCrossCameraProgress()
+
+                      // 更新重识别结果
+                      this.reIdResults = matchResponse.data.matched_records.map(record => {
+                        // 计算帧级匹配的统计信息
+                        const frameMatches = record.matched_frames || []
+                        const frameMatchCount = frameMatches.length
+                        const avgFrameConfidence = frameMatches.length > 0
+                          ? frameMatches.reduce((sum, frame) => sum + frame.similarity, 0) / frameMatches.length
+                          : 0
+
+                        return {
+                          id: record.id,
+                          studentId: record.student_id,
+                          cameraId: record.camera_id,
+                          timestamp: record.timestamp,
+                          name: record.name,
+                          location_x: record.location_x,
+                          location_y: record.location_y,
+                          confidence: record.confidence,
+                          videoPath: record.video_path || null,
+                          videoStartTime: record.video_start_time || null,
+                          videoEndTime: record.video_end_time || null,
+                          frameMatches: frameMatches,
+                          frameMatchCount: frameMatchCount,
+                          avgFrameConfidence: avgFrameConfidence
+                        }
+                      })
+
+                      // 保存原始匹配数据，用于详细查看
+                      this.rawMatchData = matchResponse.data.matched_records
+
+                      setTimeout(() => {
+                        // 第四步：构建最可能的轨迹
+                        this.$message({
+                          message: '生成最佳轨迹...',
+                          type: 'info'
+                        })
+
+                        // 开始轨迹整合进度动画
+                        const completeTrajectoryProgress = animateProgress('trajectoryIntegration', 100)
+
+                        if (this.reIdResults.length > 0) {
+                          // 按时间排序
+                          this.reIdResults.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+
+                          // 提取轨迹记录ID
+                          this.recordIds = this.reIdResults.map(record => record.id)
+
+                          // 使用重识别结果生成轨迹数据
+                          // 构建轨迹数据格式
+                          const trajectoryData = this.reIdResults.map(record => ({
+                            id: record.id,
+                            camera_id: record.cameraId,
+                            timestamp: record.timestamp,
+                            location_x: record.location_x,
+                            location_y: record.location_y,
+                            name: record.name || `摄像头${record.cameraId}`
+                          }))
+
+                          // 简单模拟轨迹段，连接相邻摄像头点
+                          const segments = []
+                          for (let i = 0; i < trajectoryData.length - 1; i++) {
+                            segments.push({
+                              start_location: [trajectoryData[i].location_x, trajectoryData[i].location_y],
+                              end_location: [trajectoryData[i + 1].location_x, trajectoryData[i + 1].location_y],
+                              start_camera_id: trajectoryData[i].camera_id,
+                              end_camera_id: trajectoryData[i + 1].camera_id,
+                              start_time: trajectoryData[i].timestamp,
+                              end_time: trajectoryData[i + 1].timestamp
+                            })
+                          }
+
+                          // 暂无异常点数据
+                          const anomalies = []
+
+                          // 处理轨迹数据
+                          this.processTrajectoryData(trajectoryData, segments, anomalies)
+
+                          // 轨迹集成完成
+                          completeTrajectoryProgress()
+
+                          setTimeout(() => {
+                            this.$message.success(`重识别完成，找到 ${this.reIdResults.length} 条匹配记录`)
+                            this.isLoading = false
+                          }, 500)
+                        } else {
+                          this.recordIds = []
+                          completeTrajectoryProgress()
+
+                          setTimeout(() => {
+                            this.$message.warning('重识别处理完成，但未找到匹配记录')
+                            this.isLoading = false
+                          }, 500)
+                        }
+                      }, 500) // 确保跨摄像头匹配进度显示100%后再进行下一步
+                    } else {
+                      clearAllAnimations()
+                      this.$message.error(matchResponse.data.message || '特征匹配失败')
+                      this.isLoading = false
+                    }
+                  }).catch(error => {
+                    clearAllAnimations()
+                    console.error('特征匹配错误:', error)
+                    this.$message.error('特征匹配失败，请检查网络连接')
+                    this.isLoading = false
+                  })
+                }, 500) // 确保特征提取进度完成后再进行下一步
               } else {
-                this.recordIds = []
-                this.reIdProgress.trajectoryIntegration = 100
-                this.$message.warning('重识别处理完成，但未找到匹配记录')
+                clearAllAnimations()
+                this.$message.error(extractResponse.data.message || '特征提取失败')
+                this.isLoading = false
               }
-            } else {
-              this.$message.error(matchResponse.data.message || '特征匹配失败')
-            }
-          } else {
-            this.$message.error(extractResponse.data.message || '特征提取失败')
-          }
+            }).catch(error => {
+              clearAllAnimations()
+              console.error('特征提取错误:', error)
+              this.$message.error('特征提取失败，请检查网络连接')
+              this.isLoading = false
+            })
+          }, 500) // 确保时空约束分析进度显示100%后再进行下一步
         } else {
+          clearAllAnimations()
           this.$message.error(spatiotemporalResponse.data.message || '时空约束分析失败')
+          this.isLoading = false
         }
       } catch (error) {
+        clearAllAnimations()
         console.error('重识别处理错误:', error)
         this.$message.error('重识别处理失败，请检查网络连接')
-      } finally {
         this.isLoading = false
       }
     },
@@ -976,23 +1080,23 @@ export default {
 }
 
 .steps-container {
-  margin-bottom: 30px;
+  margin: 20px auto 40px;
+  width: 100%;
+  padding: 10px 0;
 }
 
-/* 在 <style scoped> 部分添加或修改以下样式 */
 .content {
   display: flex;
   margin-bottom: 20px;
   gap: 20px;
 }
 
-/* 修改步骤3的左右比例 */
 .content-left {
-  flex: 2; /* 原来是1，改为2，让地图区域更宽 */
+  flex: 2;
 }
 
 .content-right {
-  flex: 1; /* 保持为1，轨迹信息区域更窄 */
+  flex: 1;
 }
 
 /* 确保地图填满整个区域 */

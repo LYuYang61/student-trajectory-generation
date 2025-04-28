@@ -5,21 +5,19 @@
       <span>请选择功能</span>
     </div>
     <div class="content">
-      <!--
-      <el-button class="button1" type="info" circle @click="trackByImg">
+      <el-button class="button3" type="info" circle @click="CameraManagement">
         <div class="btn-icon">
-          <i class="el-icon-camera"></i>
+          <i class="el-icon-odometer"></i>
         </div>
         <div class="btn-title">
-          <span>图像检测</span>
+          <span>监控管理</span>
         </div>
         <div class="btn-content">
-          <p>可上传本地文件中的图像进行检测</p>
-          <p>支持jpg, png, jpeg等图像格式</p>
+          <p>对校园监控摄像头名称、位置等信息进行统一管理</p>
+          <p>支持查看特定时间段的监控视频</p>
         </div>
       </el-button>
-      -->
-      <el-button class="button2" type="info" circle @click="trackByVideo">
+      <el-button class="button2" type="info" circle @click="TrackByVideo">
         <div class="btn-icon">
           <i class="el-icon-video-camera"></i>
         </div>
@@ -31,18 +29,6 @@
           <p>支持mp4, mov等视频格式</p>
         </div>
       </el-button>
-      <el-button class="button3" type="info" circle @click="realtimeTrack">
-        <div class="btn-icon">
-          <i class="el-icon-odometer"></i>
-        </div>
-        <div class="btn-title">
-          <span>实时跟踪</span>
-        </div>
-        <div class="btn-content">
-          <p>通过设备的摄像头进行实时跟踪</p>
-          <p>目前仅支持行人检测</p>
-        </div>
-      </el-button>
       <el-button class="button4" type="info" circle @click="TrackVisualization">
         <div class="btn-icon">
           <i class="el-icon-view"></i>
@@ -51,8 +37,8 @@
           <span>轨迹可视化</span>
         </div>
         <div class="btn-content">
-          <p>还原学生在特定时间段的大致轨迹</p>
-          <p>支持时间段选择</p>
+          <p>还原指定学生在特定时间段的大致轨迹</p>
+          <p>支持学生关联属性、时间段选择</p>
         </div>
       </el-button>
     </div>
@@ -62,7 +48,7 @@
 <script>
 import Menu from '../components/Menu.vue'
 export default {
-  name: 'Tracking',
+  name: 'Function',
   components: {
     Menu
   },
@@ -70,17 +56,13 @@ export default {
     return {}
   },
   methods: {
-    // 图片检测
-    // trackByImg () {
-    //   this.$router.push({path: '/TrackByImg'})
-    // },
-    // 视频检测
-    trackByVideo () {
-      this.$router.push({path: '/TrackByVideo'})
+    // 监控管理
+    CameraManagement () {
+      this.$router.push({path: '/CameraManagement'})
     },
-    // 实时检测
-    realtimeTrack () {
-      this.$router.push({path: '/RealtimeTracking'})
+    // 视频检测
+    TrackByVideo () {
+      this.$router.push({path: '/TrackByVideo'})
     },
     // 轨迹可视化
     TrackVisualization () {

@@ -4,11 +4,13 @@
     <div class="title">
       <p>基于深度学习的校园学生轨迹追踪系统设计与实现</p>
     </div>
+    <!--
     <div class="button">
       <el-button type="info" round @click="startTracking">
         <span>点击进入</span>
       </el-button>
     </div>
+    -->
   </div>
 </template>
 
@@ -25,7 +27,7 @@ export default {
   },
   methods: {
     startTracking () {
-      this.$router.push({path: '/Tracking'})
+      this.$router.push({path: '/Function'})
     }
   }
 }
@@ -61,7 +63,7 @@ export default {
 }
 
 .title {
-  margin-top: 6%;
+  margin-top: 7%;
   font-size: 4vw;
   color: #ffffff;
 }
