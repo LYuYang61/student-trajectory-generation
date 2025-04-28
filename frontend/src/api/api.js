@@ -1,41 +1,6 @@
-// import axios from 'axios'
-// import {SERVER_ADDRESS} from '../static/js/global'
-//
-// export const trackByImg = (data) => {
-//   return axios({
-//     method: 'post',
-//     url: `${SERVER_ADDRESS}/trackByImg`,
-//     responseType: 'blob',
-//     data: data
-//   })
-// }
-//
-// export const trackByVideo = (data) => {
-//   return axios({
-//     method: 'post',
-//     url: `${SERVER_ADDRESS}/trackByVideo`,
-//     responseType: 'blob',
-//     data: data
-//   })
-// }
-//
-// export const cancelTrack = () => {
-//   return axios({
-//     method: 'get',
-//     url: `${SERVER_ADDRESS}/cancelTrack`
-//   })
-// }
-//
-// export const realtimeTrackType = (data) => {
-//   return axios({
-//     method: 'post',
-//     url: `${SERVER_ADDRESS}/realtimeTrackType`,
-//     data: data
-//   })
-// }
-//
 import request from '../util/request'
 
+// 视频跟踪相关 API
 export const trackByVideo = (data) => {
   return request({
     method: 'post',
@@ -59,7 +24,7 @@ export const stopDetection = () => {
   })
 }
 
-// 添加轨迹可视化相关API
+// 轨迹可视化相关 API
 export const filterRecords = (data) => {
   return request({
     method: 'post',
@@ -92,25 +57,63 @@ export const matchFeatures = (data) => {
   })
 }
 
-// 保留原有API以保持向后兼容性
-export const performReID = (data) => {
+// 监控管理相关 API
+export const getAllCameras = () => {
+  return request({
+    method: 'get',
+    url: '/cameras'
+  })
+}
+
+export const getCamera = (cameraId) => {
+  return request({
+    method: 'get',
+    url: `/cameras/${cameraId}`
+  })
+}
+
+export const addCamera = (data) => {
   return request({
     method: 'post',
-    url: '/reid',
+    url: '/cameras',
     data: data
   })
 }
 
-export const getTrajectory = (data) => {
+export const updateCamera = (data) => {
   return request({
-    method: 'post',
-    url: '/trajectory',
+    method: 'put',
+    url: `/cameras/${data.camera_id}`,
     data: data
   })
 }
-// export const test = () => {
-//   return request({
-//     method: 'get',
-//     url: '/test'
-//   })
-// }
+
+export const deleteCamera = (cameraId) => {
+  return request({
+    method: 'delete',
+    url: `/cameras/${cameraId}`
+  })
+}
+
+export const getCameraVideos = (cameraId, date) => {
+  return request({
+    method: 'get',
+    url: `/cameras/${cameraId}/videos`,
+    params: { date }
+  })
+}
+
+export const addVideo = (data) => {
+  return request({
+    method: 'post',
+    url: '/videos',
+    data: data
+  })
+}
+
+export const deleteVideo = (videoId) => {
+  return request({
+    method: 'delete',
+    url: `/videos/${videoId}`
+  })
+}

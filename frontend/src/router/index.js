@@ -5,6 +5,7 @@ import Tracking from '../views/Tracking'
 import TrackByVideo from '../views/TrackByVideo'
 import RealtimeTracking from '../views/RealtimeTracking'
 import TrackVisualization from '../views/TrackVisualization'
+import CameraManagement from '../views/CameraManagement'
 
 Vue.use(VueRouter)
 
@@ -33,6 +34,11 @@ const routes = [
     path: '/TrackVisualization',
     name: 'TrackVisualization',
     component: TrackVisualization
+  },
+  {
+    path: '/CameraManagement',
+    name: 'CameraManagement',
+    component: CameraManagement
   }
 ]
 

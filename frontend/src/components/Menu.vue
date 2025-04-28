@@ -22,7 +22,7 @@ export default {
       pages: [
         {name: '首页', index: '/'},
         {name: '功能介绍', index: '/Tracking'},
-        // {name: '图像检测', index: '/TrackByImg'},
+        {name: '监控管理', index: '/CameraManagement'},
         {name: '视频跟踪', index: '/TrackByVideo'},
         {name: '实时跟踪', index: '/RealtimeTracking'},
         {name: '轨迹可视化', index: '/TrackVisualization'}

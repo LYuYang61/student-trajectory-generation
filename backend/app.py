@@ -1,14 +1,15 @@
 import base64
 import logging
 import os
-from datetime import datetime
+import traceback
+from datetime import datetime, timedelta
 
 import networkx as nx
 import numpy as np
 import pandas as pd
 from flask_socketio import SocketIO
 import flask
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, abort, send_file
 from sqlalchemy.testing import db
 
 from backend.dbInterface.db_interface import DatabaseInterface
@@ -37,6 +38,11 @@ db_config = {
     'password': '123456',
     'database': 'trajectory',
 }
+
+# 视频文件存储路径
+VIDEO_STORAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), './resources/videos')
+if not os.path.exists(VIDEO_STORAGE_PATH):
+    os.makedirs(VIDEO_STORAGE_PATH)
 
 # 首先初始化数据库接口
 db_interface = DatabaseInterface(db_config)
@@ -438,27 +444,359 @@ def reid():
         logging.error(f"重识别错误: {str(e)}")
         return jsonify({'status': 'error', 'message': f'重识别错误: {str(e)}'})
 
-@app.route('/trajectory', methods=['POST'])
-def get_trajectory():
-    """获取完整的轨迹数据"""
-    data = request.json
-    record_ids = data.get('recordIds', [])
 
-    # 根据记录ID获取详细信息
-    trajectory_data = query_filter.get_records_by_ids(record_ids)
+@app.route('/cameras', methods=['GET'])
+def get_all_cameras():
+    """获取所有摄像头信息"""
+    try:
+        query = "SELECT camera_id, location_x, location_y, name FROM cameras"
+        cameras = db_interface.execute_query(query)
+        return jsonify({
+            'status': 'success',
+            'data': cameras
+        })
+    except Exception as e:
+        logger.error(f"获取摄像头信息失败: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
-    # 获取轨迹段
-    segments = spatiotemporal_analyzer.get_trajectory_segments(trajectory_data)
 
-    # 获取异常点
-    anomalies = spatiotemporal_analyzer.analyze_anomalies(trajectory_data)
+@app.route('/cameras/<int:camera_id>', methods=['GET'])
+def get_camera(camera_id):
+    """获取单个摄像头信息"""
+    try:
+        query = "SELECT camera_id, location_x, location_y, name FROM cameras WHERE camera_id = %s"
+        if db_config['type'].lower() == 'sqlite':
+            query = query.replace("%s", "?")
+        cameras = db_interface.execute_query(query, (camera_id,))
+        if cameras:
+            return jsonify({
+                'status': 'success',
+                'data': cameras[0]
+            })
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'找不到ID为 {camera_id} 的摄像头'
+            }), 404
+    except Exception as e:
+        logger.error(f"获取摄像头信息失败: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
-    return jsonify({
-        'status': 'success',
-        'trajectory_data': trajectory_data.to_dict('records'),
-        'segments': segments,
-        'anomalies': anomalies
-    })
+
+@app.route('/cameras', methods=['POST'])
+def add_camera():
+    """添加新摄像头"""
+    try:
+        data = request.json
+        name = data.get('name')
+        location_x = data.get('location_x')
+        location_y = data.get('location_y')
+
+        # 参数验证
+        if not name or location_x is None or location_y is None:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少必要参数'
+            }), 400
+
+        # 获取最大的camera_id
+        max_id_query = "SELECT MAX(camera_id) as max_id FROM cameras"
+        result = db_interface.execute_query(max_id_query)
+        new_id = 1  # 默认值
+        if result and result[0]['max_id'] is not None:
+            new_id = int(result[0]['max_id']) + 1
+
+        # 插入新摄像头
+        insert_query = """
+        INSERT INTO cameras (camera_id, name, location_x, location_y) 
+        VALUES (%s, %s, %s, %s)
+        """
+        if db_config['type'].lower() == 'sqlite':
+            insert_query = insert_query.replace("%s", "?")
+
+        db_interface.execute_query(insert_query, (new_id, name, location_x, location_y))
+        db_interface.conn.commit()
+
+        return jsonify({
+            'status': 'success',
+            'message': '添加摄像头成功',
+            'data': {
+                'camera_id': new_id,
+                'name': name,
+                'location_x': location_x,
+                'location_y': location_y
+            }
+        })
+    except Exception as e:
+        logger.error(f"添加摄像头失败: {e}")
+        db_interface.conn.rollback()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@app.route('/cameras/<int:camera_id>', methods=['PUT'])
+def update_camera(camera_id):
+    """更新摄像头信息"""
+    try:
+        data = request.json
+        name = data.get('name')
+        location_x = data.get('location_x')
+        location_y = data.get('location_y')
+
+        # 参数验证
+        if not name or location_x is None or location_y is None:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少必要参数'
+            }), 400
+
+        # 检查摄像头是否存在
+        check_query = "SELECT camera_id FROM cameras WHERE camera_id = %s"
+        if db_config['type'].lower() == 'sqlite':
+            check_query = check_query.replace("%s", "?")
+        result = db_interface.execute_query(check_query, (camera_id,))
+        if not result:
+            return jsonify({
+                'status': 'error',
+                'message': f'找不到ID为 {camera_id} 的摄像头'
+            }), 404
+
+        # 更新摄像头信息
+        update_query = """
+        UPDATE cameras 
+        SET name = %s, location_x = %s, location_y = %s 
+        WHERE camera_id = %s
+        """
+        if db_config['type'].lower() == 'sqlite':
+            update_query = update_query.replace("%s", "?")
+
+        db_interface.execute_query(update_query, (name, location_x, location_y, camera_id))
+        db_interface.conn.commit()
+
+        return jsonify({
+            'status': 'success',
+            'message': '更新摄像头成功',
+            'data': {
+                'camera_id': camera_id,
+                'name': name,
+                'location_x': location_x,
+                'location_y': location_y
+            }
+        })
+    except Exception as e:
+        logger.error(f"更新摄像头失败: {e}")
+        db_interface.conn.rollback()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@app.route('/cameras/<int:camera_id>', methods=['DELETE'])
+def delete_camera(camera_id):
+    """删除摄像头"""
+    try:
+        # 检查摄像头是否存在
+        check_query = "SELECT camera_id FROM cameras WHERE camera_id = %s"
+        if db_config['type'].lower() == 'sqlite':
+            check_query = check_query.replace("%s", "?")
+        result = db_interface.execute_query(check_query, (camera_id,))
+        if not result:
+            return jsonify({
+                'status': 'error',
+                'message': f'找不到ID为 {camera_id} 的摄像头'
+            }), 404
+
+        # 删除摄像头
+        delete_query = "DELETE FROM cameras WHERE camera_id = %s"
+        if db_config['type'].lower() == 'sqlite':
+            delete_query = delete_query.replace("%s", "?")
+
+        db_interface.execute_query(delete_query, (camera_id,))
+        db_interface.conn.commit()
+
+        return jsonify({
+            'status': 'success',
+            'message': '删除摄像头成功'
+        })
+    except Exception as e:
+        logger.error(f"删除摄像头失败: {e}")
+        db_interface.conn.rollback()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@app.route('/cameras/<int:camera_id>/videos', methods=['GET'])
+def get_camera_videos(camera_id):
+    """获取指定摄像头特定日期的视频列表"""
+    try:
+        date = request.args.get('date')
+        if not date:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少日期参数'
+            }), 400
+
+        # 查询视频
+        query = """
+        SELECT id, camera_id, date, start_time, end_time, video_path
+        FROM camera_videos
+        WHERE camera_id = %s AND date = %s
+        ORDER BY start_time
+        """
+        if db_config['type'].lower() == 'sqlite':
+            query = query.replace("%s", "?")
+
+        videos = db_interface.execute_query(query, (camera_id, date))
+
+        # 处理时间格式，确保可JSON序列化
+        for video in videos:
+            # 处理start_time
+            if isinstance(video['start_time'], timedelta):
+                hours, remainder = divmod(video['start_time'].seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                video['start_time'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+            # 处理end_time
+            if isinstance(video['end_time'], timedelta):
+                hours, remainder = divmod(video['end_time'].seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                video['end_time'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+            # 确保视频路径是完整的OSS URL
+            if video['video_path'] and not video['video_path'].startswith('http'):
+                # 如果数据库中存的是相对路径，则拼接为完整URL
+                video['video_path'] = f"https://qingwu-oss.oss-cn-heyuan.aliyuncs.com/lian/{video['video_path']}"
+
+        return jsonify({
+            'status': 'success',
+            'data': videos
+        })
+    except Exception as e:
+        logger.error(f"获取视频列表失败: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+@app.route('/videos', methods=['POST'])
+def add_video():
+    """添加视频记录"""
+    try:
+        data = request.json
+        camera_id = data.get('camera_id')
+        date = data.get('date')
+        start_time = data.get('start_time')
+        end_time = data.get('end_time')
+        video_path = data.get('video_path')
+
+        # 参数验证
+        if not camera_id or not date or not start_time or not end_time or not video_path:
+            return jsonify({
+                'status': 'error',
+                'message': '缺少必要参数'
+            }), 400
+
+        # 检查摄像头是否存在
+        check_query = "SELECT camera_id FROM cameras WHERE camera_id = %s"
+        if db_config['type'].lower() == 'sqlite':
+            check_query = check_query.replace("%s", "?")
+        result = db_interface.execute_query(check_query, (camera_id,))
+        if not result:
+            return jsonify({
+                'status': 'error',
+                'message': f'找不到ID为 {camera_id} 的摄像头'
+            }), 404
+
+        # 插入视频记录
+        insert_query = """
+        INSERT INTO camera_videos (camera_id, date, start_time, end_time, video_path) 
+        VALUES (%s, %s, %s, %s, %s)
+        """
+        if db_config['type'].lower() == 'sqlite':
+            insert_query = insert_query.replace("%s", "?")
+
+        db_interface.execute_query(insert_query, (camera_id, date, start_time, end_time, video_path))
+        db_interface.conn.commit()
+
+        return jsonify({
+            'status': 'success',
+            'message': '添加视频记录成功'
+        })
+    except Exception as e:
+        logger.error(f"添加视频记录失败: {e}")
+        db_interface.conn.rollback()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@app.route('/videos/<int:video_id>', methods=['DELETE'])
+def delete_video(video_id):
+    """删除视频记录"""
+    try:
+        # 检查视频记录是否存在
+        check_query = "SELECT id, video_path FROM camera_videos WHERE id = %s"
+        if db_config['type'].lower() == 'sqlite':
+            check_query = check_query.replace("%s", "?")
+        result = db_interface.execute_query(check_query, (video_id,))
+        if not result:
+            return jsonify({
+                'status': 'error',
+                'message': f'找不到ID为 {video_id} 的视频记录'
+            }), 404
+
+        # 删除视频文件
+        video_path = result[0]['video_path']
+        full_path = os.path.join(VIDEO_STORAGE_PATH, video_path)
+        if os.path.exists(full_path):
+            os.remove(full_path)
+
+        # 删除数据库记录
+        delete_query = "DELETE FROM camera_videos WHERE id = %s"
+        if db_config['type'].lower() == 'sqlite':
+            delete_query = delete_query.replace("%s", "?")
+
+        db_interface.execute_query(delete_query, (video_id,))
+        db_interface.conn.commit()
+
+        return jsonify({
+            'status': 'success',
+            'message': '删除视频记录成功'
+        })
+    except Exception as e:
+        logger.error(f"删除视频记录失败: {e}")
+        db_interface.conn.rollback()
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+
+@app.route('/video/<path:video_path>')
+def serve_video(video_path):
+    """提供视频文件"""
+    try:
+        full_path = os.path.join(VIDEO_STORAGE_PATH, video_path)
+        if not os.path.exists(full_path):
+            abort(404)
+        return send_file(full_path, mimetype='video/mp4')
+    except Exception as e:
+        logger.error(f"提供视频文件失败: {e}")
+        abort(500)
+
 
 if __name__ == '__main__':
     socketio.run(app, host="0.0.0.0", debug=True, port=5000, allow_unsafe_werkzeug=True)
