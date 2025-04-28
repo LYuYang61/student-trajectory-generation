@@ -60,13 +60,7 @@ export default {
       polylines: [],
       infoWindows: [],
       // 校园建筑物基本信息
-      buildings: [
-        {name: '新安学堂', position: [118.718797, 30.911546], icon: 'building'},
-        {name: '图书馆', position: [118.716685, 30.909624], icon: 'library'},
-        {name: '食堂', position: [118.720928, 30.911897], icon: 'restaurant'},
-        {name: '操场', position: [118.722249, 30.912036], icon: 'gym'},
-        {name: '体育馆', position: [118.72153, 30.911107], icon: 'gym'}
-      ]
+      buildings: []
     }
   },
   watch: {

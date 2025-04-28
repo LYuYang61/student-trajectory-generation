@@ -178,6 +178,55 @@ class ReIDProcessor:
             logger.error(f"特征提取失败: {str(e)}", exc_info=True)
             return None
 
+    def _download_video_from_url(self, url, local_cache_dir="./resources/videos"):
+        """
+        从URL下载视频到本地缓存目录
+
+        Args:
+            url: 视频URL
+            local_cache_dir: 本地缓存目录
+
+        Returns:
+            本地视频文件路径
+        """
+        import requests
+        import os
+        import hashlib
+
+        logger.info(f"从URL下载视频: {url}")
+
+        # 创建缓存目录
+        os.makedirs(local_cache_dir, exist_ok=True)
+
+        # 使用URL的MD5哈希作为文件名
+        url_hash = hashlib.md5(url.encode()).hexdigest()
+        video_name = f"{url_hash}.mp4"
+        local_path = os.path.join(local_cache_dir, video_name)
+
+        # 如果缓存中已有该视频，直接返回
+        if os.path.exists(local_path):
+            logger.info(f"视频已存在于本地缓存中: {local_path}")
+            return local_path
+
+        try:
+            # 下载视频
+            logger.info(f"开始下载视频: {url}")
+            response = requests.get(url, stream=True)
+            response.raise_for_status()
+
+            # 保存视频到本地
+            with open(local_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            logger.info(f"视频下载完成，保存至: {local_path}")
+            return local_path
+
+        except Exception as e:
+            logger.error(f"下载视频时出错: {str(e)}", exc_info=True)
+            return None
+
     def _get_video_paths(self, records):
         """
         根据记录信息获取对应的视频路径
@@ -318,6 +367,15 @@ class ReIDProcessor:
             提取的帧列表
         """
         logger.info(f"开始从视频中提取帧: {video_path}, 时间点: {timestamp_str}")
+
+        # 检查是否是URL
+        if video_path.startswith('http'):
+            logger.info("检测到URL视频路径，开始下载")
+            local_video_path = self._download_video_from_url(video_path)
+            if not local_video_path:
+                logger.error("下载视频失败")
+                return []
+            video_path = local_video_path
 
         if not os.path.exists(video_path):
             logger.error(f"视频文件不存在: {video_path}")

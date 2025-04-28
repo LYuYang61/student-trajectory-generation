@@ -10,7 +10,11 @@ CREATE TABLE student_records (
     has_umbrella BOOLEAN, -- 是否带雨伞
     has_bicycle BOOLEAN, -- 是否骑自行车
     feature_vector BLOB, -- 特征向量（以二进制存储）
-    image_frame BLOB -- 图像帧（以二进制存储）
+    image_frame BLOB, -- 图像帧（以二进制存储）
+    confidence_east FLOAT, -- 东方向置信度
+    confidence_south FLOAT, -- 南方向置信度
+    confidence_west FLOAT, -- 西方向置信度
+    confidence_north FLOAT -- 北方向置信度
 );
 
 -- 创建 `cameras` 表，用于存储摄像头位置信息

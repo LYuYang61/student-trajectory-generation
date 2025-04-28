@@ -157,16 +157,16 @@
     </div>
 
     <!-- Step 3: Trajectory Visualization -->
-    <div v-if="activeStep === 3" class="content">
-      <div class="content-left">
-        <BaiduMap
-          class="baidu-map"
-          ref="baiduMap"
-          :trajectory-data="trajectoryData"
-          @camera-click="handleCameraClick">
-        </BaiduMap>
-      </div>
-      <div class="content-right">
+    <div v-if="activeStep === 3" class="content trajectory-content">
+    <div class="content-left map-container">
+      <BaiduMap
+        class="baidu-map"
+        ref="baiduMap"
+        :trajectory-data="trajectoryData"
+        @camera-click="handleCameraClick">
+      </BaiduMap>
+    </div>
+    <div class="content-right info-container">
         <el-card v-if="!showVideo" shadow="always" class="card">
           <div slot="header" class="clearfix">
             <span><b>轨迹信息</b></span>
@@ -272,13 +272,7 @@ export default {
         timestamp: ''
       },
       // 摄像头数据
-      cameras: [
-        { id: '1', name: '新安学堂', location: '新安学堂正门', position: [118.718797, 30.911546] },
-        { id: '2', name: '图书馆', location: '图书馆正门', position: [118.716685, 30.909624] },
-        { id: '3', name: '食堂', location: '南漪湖餐厅', position: [118.720928, 30.911897] },
-        { id: '4', name: '操场', location: '操场正门', position: [118.722249, 30.912036] },
-        { id: '5', name: '体育馆', location: '体育馆正门', position: [118.72153, 30.911107] }
-      ],
+      cameras: [],
       // 存储视频URL的基础路径
       baseVideoUrl: '',
       socket: null,
@@ -302,8 +296,15 @@ export default {
       return this.reIdResults.map(item => item.cameraId)
     },
     videoUrl () {
-      // 使用基础URL和公共路径构建完整的视频URL
-      return this.selectedVideo.url || ''
+      if (!this.selectedVideo.url) return ''
+
+      // 如果已经是完整的URL，则直接返回
+      if (this.selectedVideo.url.match(/^(http|https|file):\/\//)) {
+        return this.selectedVideo.url
+      }
+
+      // 处理相对路径
+      return this.selectedVideo.url // Vue会正确处理相对于public目录的路径
     }
   },
   created () {
@@ -438,7 +439,7 @@ export default {
               name: record.name || `摄像头${record.camera_id}`,
               timestamp: record.timestamp,
               matchedAttributes: this.getMatchedAttributes(record),
-              image: record.image_base64 || `https://picsum.photos/id/${record.id * 10}/300/200`,
+              // image: record.image_base64 || `https://picsum.photos/id/${record.id * 10}/300/200`,
               has_backpack: record.has_backpack,
               has_umbrella: record.has_umbrella,
               has_bicycle: record.has_bicycle
@@ -625,9 +626,9 @@ export default {
                   location_x: record.location_x,
                   location_y: record.location_y,
                   confidence: record.confidence,
-                  videoPath: record.video_path,
-                  videoStartTime: record.video_start_time,
-                  videoEndTime: record.video_end_time,
+                  videoPath: record.video_path || null,
+                  videoStartTime: record.video_start_time || null,
+                  videoEndTime: record.video_end_time || null,
                   frameMatches: frameMatches,
                   frameMatchCount: frameMatchCount,
                   avgFrameConfidence: avgFrameConfidence
@@ -649,6 +650,36 @@ export default {
 
                 // 提取轨迹记录ID
                 this.recordIds = this.reIdResults.map(record => record.id)
+
+                // 使用重识别结果生成轨迹数据
+                // 构建轨迹数据格式
+                const trajectoryData = this.reIdResults.map(record => ({
+                  id: record.id,
+                  camera_id: record.cameraId,
+                  timestamp: record.timestamp,
+                  location_x: record.location_x,
+                  location_y: record.location_y,
+                  name: record.name || `摄像头${record.cameraId}`
+                }))
+
+                // 简单模拟轨迹段，连接相邻摄像头点
+                const segments = []
+                for (let i = 0; i < trajectoryData.length - 1; i++) {
+                  segments.push({
+                    start_location: [trajectoryData[i].location_x, trajectoryData[i].location_y],
+                    end_location: [trajectoryData[i + 1].location_x, trajectoryData[i + 1].location_y],
+                    start_camera_id: trajectoryData[i].camera_id,
+                    end_camera_id: trajectoryData[i + 1].camera_id,
+                    start_time: trajectoryData[i].timestamp,
+                    end_time: trajectoryData[i + 1].timestamp
+                  })
+                }
+
+                // 暂无异常点数据
+                const anomalies = []
+
+                // 处理轨迹数据
+                this.processTrajectoryData(trajectoryData, segments, anomalies)
 
                 // 轨迹集成完成
                 this.reIdProgress.trajectoryIntegration = 100
@@ -683,80 +714,130 @@ export default {
         cameras: []
       }
 
-      // 添加摄像头位置
-      const uniqueCameras = new Set()
-      trajectoryData.forEach(record => {
-        if (!uniqueCameras.has(record.camera_id)) {
-          uniqueCameras.add(record.camera_id)
+      // 确保轨迹数据按时间排序
+      const sortedTrajectoryData = [...trajectoryData].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
 
-          const cameraInfo = this.cameras.find(c => c.id === record.camera_id.toString())
-          if (cameraInfo) {
-            this.trajectoryData.cameras.push({
-              id: record.camera_id.toString(),
-              name: cameraInfo.name,
-              position: [record.location_x || cameraInfo.position[0], record.location_y || cameraInfo.position[1]],
-              timestamp: record.timestamp
-            })
-          }
+      console.log('处理轨迹数据，摄像头记录数:', sortedTrajectoryData.length)
+
+      // 添加摄像头位置
+      sortedTrajectoryData.forEach(record => {
+        // 检查是否已添加该摄像头
+        const cameraId = record.camera_id.toString()
+        if (!this.trajectoryData.cameras.some(c => c.id === cameraId)) {
+          this.trajectoryData.cameras.push({
+            id: cameraId,
+            name: record.name || `摄像头${cameraId}`,
+            position: [record.location_x, record.location_y],
+            timestamp: record.timestamp
+          })
         }
       })
 
-      // 添加轨迹点
+      console.log('添加了摄像头数:', this.trajectoryData.cameras.length)
+
+      // 按时间顺序添加摄像头点
       this.trajectoryData.cameras.forEach(camera => {
-        // 添加摄像头点
+        sortedTrajectoryData.find(r => r.camera_id.toString() === camera.id)
         this.trajectoryData.points.push({
           position: camera.position,
           type: 'camera',
-          cameraId: camera.id
+          cameraId: camera.id,
+          timestamp: camera.timestamp,
+          order: sortedTrajectoryData.findIndex(r => r.camera_id.toString() === camera.id) // 添加顺序属性
         })
       })
 
-      // 添加路径段点
-      segments.forEach(segment => {
-        // 添加起点和终点之间的路径点
-        const startPos = segment.start_location
-        const endPos = segment.end_location
+      // 添加中间路径点
+      if (segments && segments.length > 0) {
+        segments.forEach((segment, segmentIndex) => {
+          const startPos = segment.start_location
+          const endPos = segment.end_location
+          const startTime = new Date(segment.start_time)
+          const endTime = new Date(segment.end_time)
 
-        // 生成几个中间点模拟路径
-        const pointCount = Math.floor(Math.random() * 3) + 2
-        for (let j = 1; j <= pointCount; j++) {
-          const ratio = j / (pointCount + 1)
-          const x = startPos[0] + (endPos[0] - startPos[0]) * ratio
-          const y = startPos[1] + (endPos[1] - startPos[1]) * ratio
+          // 在起点和终点之间生成几个中间点模拟路径
+          const pointCount = Math.floor(Math.random() * 3) + 2
+          for (let j = 1; j <= pointCount; j++) {
+            const ratio = j / (pointCount + 1)
+            const x = startPos[0] + (endPos[0] - startPos[0]) * ratio
+            const y = startPos[1] + (endPos[1] - startPos[1]) * ratio
 
-          // 添加轻微随机偏移
-          const offsetX = (Math.random() - 0.5) * 0.0002
-          const offsetY = (Math.random() - 0.5) * 0.0002
+            // 插值计算中间时间点
+            const timeOffset = (endTime - startTime) * ratio
+            const pointTime = new Date(startTime.getTime() + timeOffset)
 
-          this.trajectoryData.points.push({
-            position: [x + offsetX, y + offsetY],
-            type: 'path'
-          })
-        }
-      })
+            // 添加轻微随机偏移使路径更自然
+            const offsetX = (Math.random() - 0.5) * 0.0002
+            const offsetY = (Math.random() - 0.5) * 0.0002
 
-      // 可以添加对异常点的特殊标记
-      anomalies.forEach(anomaly => {
-        if (anomaly.location) {
-          this.trajectoryData.points.push({
-            position: [anomaly.location[0], anomaly.location[1]],
-            type: 'anomaly'
-          })
-        }
-      })
+            this.trajectoryData.points.push({
+              position: [x + offsetX, y + offsetY],
+              type: 'path',
+              order: segmentIndex + 0.1 * j, // 使用分数顺序保证中间点在相应的摄像头点之间
+              timestamp: pointTime.toISOString()
+            })
+          }
+        })
+      }
+
+      // 添加异常点标记(如果有)
+      if (anomalies && anomalies.length > 0) {
+        anomalies.forEach(anomaly => {
+          if (anomaly.location) {
+            this.trajectoryData.points.push({
+              position: [anomaly.location[0], anomaly.location[1]],
+              type: 'anomaly',
+              order: 1000 // 给异常点一个很大的顺序值，确保它们最后渲染
+            })
+          }
+        })
+      }
+
+      // 按顺序排序所有点
+      this.trajectoryData.points.sort((a, b) => a.order - b.order)
+
+      console.log('处理后的轨迹数据:', this.trajectoryData)
     },
-    handleCameraClick (cameraId) {
-      // 查找对应的摄像头数据和结果
-      const camera = this.cameras.find(c => c.id === cameraId)
-      const result = this.reIdResults.find(r => r.cameraId === cameraId)
-      if (!camera || !result) return
 
-      // 设置视频信息 - 修改视频路径
+    handleCameraClick (cameraId) {
+      // 查找对应的摄像头结果
+      const result = this.reIdResults.find(r => r.cameraId.toString() === cameraId.toString())
+      if (!result) {
+        console.error(`未找到摄像头ID为${cameraId}的结果`)
+        this.$message.warning(`未找到摄像头${cameraId}对应的视频数据`)
+        return
+      }
+
+      console.log(`点击摄像头${cameraId}，找到对应结果:`, result)
+
+      // 判断视频路径类型并正确构建
+      let videoUrl
+      if (result.videoPath) {
+        // 如果是阿里云OSS链接，直接使用
+        if (result.videoPath.startsWith('https://qingwu-oss.oss-cn-heyuan.aliyuncs.com/')) {
+          videoUrl = result.videoPath
+          console.log('使用阿里云OSS视频链接:', videoUrl)
+          // eslint-disable-next-line brace-style
+        }
+        // 如果是其他HTTP(S)链接
+        else if (result.videoPath.startsWith('http')) {
+          videoUrl = result.videoPath
+          console.log('使用HTTP(S)视频链接:', videoUrl)
+        }
+      } else {
+        // 无视频路径情况
+        this.$message.warning(`摄像头${cameraId}没有关联视频`)
+        return
+      }
+
+      // 设置视频信息
       this.selectedVideo = {
-        url: 'https://qingwu-oss.oss-cn-heyuan.aliyuncs.com/lian/target.mp4', // 不使用前导斜杠，避免路径解析问题
-        cameraId: camera.id,
-        location: camera.location,
-        timestamp: result.timestamp
+        url: videoUrl,
+        cameraId: cameraId,
+        timestamp: result.timestamp,
+        location: result.name || `位置${cameraId}`,
+        startTime: result.videoStartTime,
+        endTime: result.videoEndTime
       }
 
       this.showVideo = true
@@ -774,33 +855,58 @@ export default {
         }
       })
     },
-    closeVideo () {
-      if (this.$refs.videoPlayer) {
-        this.$refs.videoPlayer.pause()
-      }
-      this.showVideo = false
-    },
+
     calculateTrajectoryLength () {
       let length = 0
-      const points = this.trajectoryData.points
+      const cameraPoints = this.trajectoryData.points.filter(p => p.type === 'camera')
 
-      for (let i = 1; i < points.length; i++) {
-        const prev = points[i - 1]
-        const curr = points[i]
-        // 使用简单的欧几里得距离计算，实际应使用地球表面距离计算
-        const dx = (curr.position[0] - prev.position[0]) * 111000 * Math.cos(prev.position[1] * Math.PI / 180)
-        const dy = (curr.position[1] - prev.position[1]) * 111000
-        length += Math.sqrt(dx * dx + dy * dy)
+      // 按时间顺序排序摄像头点
+      cameraPoints.sort((a, b) => {
+        if (a.timestamp && b.timestamp) {
+          return new Date(a.timestamp) - new Date(b.timestamp)
+        }
+        return a.order - b.order
+      })
+
+      // 计算相邻摄像头点之间的距离
+      for (let i = 1; i < cameraPoints.length; i++) {
+        const prev = cameraPoints[i - 1]
+        const curr = cameraPoints[i]
+
+        // 使用哈弗辛公式计算地球表面距离(以米为单位)
+        const lat1 = prev.position[1] * Math.PI / 180
+        const lat2 = curr.position[1] * Math.PI / 180
+        const lon1 = prev.position[0] * Math.PI / 180
+        const lon2 = curr.position[0] * Math.PI / 180
+
+        const R = 6371000 // 地球半径，单位米
+        const dLat = lat2 - lat1
+        const dLon = lon2 - lon1
+
+        const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1) * Math.cos(lat2) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        const distance = R * c
+
+        length += distance
       }
 
       return Math.round(length)
     },
+
     calculateTotalTime () {
       if (this.reIdResults.length < 2) return '0分钟'
 
-      const firstTime = new Date(this.reIdResults[0].timestamp)
-      const lastTime = new Date(this.reIdResults[this.reIdResults.length - 1].timestamp)
-      const diffMinutes = Math.round((lastTime - firstTime) / (1000 * 60))
+      // 按时间排序
+      const sortedResults = [...this.reIdResults].sort((a, b) =>
+        new Date(a.timestamp) - new Date(b.timestamp)
+      )
+
+      const firstTime = new Date(sortedResults[0].timestamp)
+      const lastTime = new Date(sortedResults[sortedResults.length - 1].timestamp)
+      const diffMilliseconds = lastTime - firstTime
+      const diffMinutes = Math.round(diffMilliseconds / (1000 * 60))
 
       if (diffMinutes < 60) {
         return `${diffMinutes}分钟`
@@ -810,33 +916,50 @@ export default {
         return `${hours}小时${minutes > 0 ? ` ${minutes}分钟` : ''}`
       }
     },
+
+    handleCanPlay () {
+      // 视频加载完成后自动播放
+      if (this.$refs.videoPlayer) {
+        this.$refs.videoPlayer.play().catch(e => {
+          console.error('视频播放失败:', e)
+          this.$message({
+            message: '请点击视频进行播放',
+            type: 'info'
+          })
+        })
+      }
+    },
+
+    closeVideo () {
+      this.showVideo = false
+      if (this.$refs.videoPlayer) {
+        this.$refs.videoPlayer.pause()
+        this.$refs.videoPlayer.currentTime = 0 // 重置视频时间
+      }
+    },
+
     getTimelineColor (index) {
-      const colors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399']
+      // 根据索引返回不同的颜色
+      const colors = ['#67C23A', '#E6A23C', '#409EFF', '#F56C6C']
       return colors[index % colors.length]
     },
+
     prevStep () {
       if (this.activeStep > 1) {
         this.activeStep--
       }
     },
+
     nextStep () {
       if (this.activeStep < 3) {
-        if (this.activeStep === 1 && this.filterResults.length === 0) {
-          this.$message.warning('请先完成过滤操作')
-          return
-        }
-        if (this.activeStep === 2 && this.reIdResults.length === 0) {
-          this.$message.warning('请先完成重识别处理')
-          return
-        }
         this.activeStep++
       } else {
-        // 如果是最后一步，可以执行完成操作
-        this.$message.success('轨迹可视化完成！')
+        // 完成操作
+        this.$message({
+          message: '处理完成',
+          type: 'success'
+        })
       }
-    },
-    handleCanPlay () {
-      console.log('视频可以播放')
     }
   }
 }
@@ -844,34 +967,40 @@ export default {
 
 <style scoped>
 .container {
-  padding: 20px;
-  max-width: 1200px;
-  margin: 0 auto;
+  background: url("../assets/bg5.jpg") no-repeat center;
+  background-size: 100% 100%;
 }
-
 .title {
-  font-size: 24px;
-  font-weight: bold;
-  margin-bottom: 20px;
-  text-align: center;
+  font-size: 3vw;
+  color: #5485c2;
 }
 
 .steps-container {
   margin-bottom: 30px;
 }
 
+/* 在 <style scoped> 部分添加或修改以下样式 */
 .content {
   display: flex;
   margin-bottom: 20px;
   gap: 20px;
 }
 
+/* 修改步骤3的左右比例 */
 .content-left {
-  flex: 1;
+  flex: 2; /* 原来是1，改为2，让地图区域更宽 */
 }
 
 .content-right {
-  flex: 1;
+  flex: 1; /* 保持为1，轨迹信息区域更窄 */
+}
+
+/* 确保地图填满整个区域 */
+.baidu-map {
+  width: 100%; /* 修改原来的120%为100% */
+  height: 500px;
+  border-radius: 4px;
+  overflow: hidden;
 }
 
 .card {
@@ -967,13 +1096,6 @@ export default {
 
 .timeline {
   margin-top: 10px;
-}
-
-.baidu-map {
-  width: 100%;
-  height: 500px;
-  border-radius: 4px;
-  overflow: hidden;
 }
 
 .track-info {
