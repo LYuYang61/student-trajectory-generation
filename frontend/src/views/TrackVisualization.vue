@@ -1,14 +1,11 @@
 <template>
   <div class="container">
     <Menu></Menu>
-    <div class="title">
-      <span>轨迹可视化</span>
-    </div>
 
     <el-steps :active="activeStep" finish-status="success" class="steps-container" align-center>
       <el-step title="身份和属性过滤" class="custom-step"></el-step>
       <el-step title="重识别处理" class="custom-step"></el-step>
-      <el-step title="轨迹可视化" class="custom-step"></el-step>
+      <el-step title="学生轨迹追踪" class="custom-step"></el-step>
     </el-steps>
 
     <!-- Step 1: Identity and Attribute Filtering -->

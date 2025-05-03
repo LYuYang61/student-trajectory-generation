@@ -34,7 +34,7 @@
           <i class="el-icon-view"></i>
         </div>
         <div class="btn-title">
-          <span>轨迹可视化</span>
+          <span>学生轨迹追踪</span>
         </div>
         <div class="btn-content">
           <p>还原指定学生在特定时间段的大致轨迹</p>
@@ -64,7 +64,7 @@ export default {
     TrackByVideo () {
       this.$router.push({path: '/TrackByVideo'})
     },
-    // 轨迹可视化
+    // 学生轨迹追踪
     TrackVisualization () {
       this.$router.push({path: '/TrackVisualization'})
     }

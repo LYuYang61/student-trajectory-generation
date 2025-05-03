@@ -2,7 +2,6 @@ import Vue from 'vue'
 import VueRouter from 'vue-router'
 import HomeView from '../views/HomeView'
 import Function from '../views/Function.vue'
-import TrackByVideo from '../views/TrackByVideo'
 import TrackVisualization from '../views/TrackVisualization'
 import CameraManagement from '../views/CameraManagement'
 
@@ -18,11 +17,6 @@ const routes = [
     path: '/Function',
     name: 'Function',
     component: Function
-  },
-  {
-    path: '/TrackByVideo',
-    name: 'TrackByVideo',
-    component: TrackByVideo
   },
   {
     path: '/TrackVisualization',

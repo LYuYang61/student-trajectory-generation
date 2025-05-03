@@ -38,8 +38,7 @@ export default {
       pages: [
         {name: '功能介绍', index: '/Function'},
         {name: '监控管理', index: '/CameraManagement'},
-        {name: '视频跟踪', index: '/TrackByVideo'},
-        {name: '轨迹可视化', index: '/TrackVisualization'}
+        {name: '学生轨迹追踪', index: '/TrackVisualization'}
       ]
     }
   },

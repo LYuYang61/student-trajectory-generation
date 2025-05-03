@@ -178,13 +178,14 @@ class ReIDProcessor:
             logger.error(f"特征提取失败: {str(e)}", exc_info=True)
             return None
 
-    def _download_video_from_url(self, url, local_cache_dir="./resources/videos"):
+    def _download_video_from_url(self, url, local_cache_dir="./resources/videos", original_filename=None):
         """
-        从URL下载视频到本地缓存目录
+        从URL(如阿里云OSS)下载视频到本地缓存目录，保留原始文件名
 
         Args:
             url: 视频URL
             local_cache_dir: 本地缓存目录
+            original_filename: 可选的原始文件名，如果提供则使用此文件名
 
         Returns:
             本地视频文件路径
@@ -192,15 +193,56 @@ class ReIDProcessor:
         import requests
         import os
         import hashlib
+        from urllib.parse import urlparse, unquote
 
         logger.info(f"从URL下载视频: {url}")
 
         # 创建缓存目录
         os.makedirs(local_cache_dir, exist_ok=True)
 
-        # 使用URL的MD5哈希作为文件名
-        url_hash = hashlib.md5(url.encode()).hexdigest()
-        video_name = f"{url_hash}.mp4"
+        # 确定文件名
+        video_name = None
+
+        # 如果提供了原始文件名，优先使用它
+        if original_filename:
+            video_name = original_filename
+            logger.info(f"使用提供的原始文件名: {video_name}")
+        else:
+            # 尝试从URL中提取文件名
+            try:
+                parsed_url = urlparse(url)
+                path = unquote(parsed_url.path)
+
+                # 从路径中获取文件名
+                path_filename = os.path.basename(path)
+
+                # 检查是否是有效的文件名
+                if path_filename and '.' in path_filename:
+                    video_name = path_filename
+                    logger.info(f"从URL路径提取文件名: {video_name}")
+
+                # 如果无法从路径获取有效文件名，检查查询参数
+                if not video_name:
+                    from urllib.parse import parse_qs
+                    query_params = parse_qs(parsed_url.query)
+
+                    # 阿里云OSS通常会有filename参数
+                    if 'filename' in query_params:
+                        video_name = query_params['filename'][0]
+                        logger.info(f"从URL查询参数提取文件名: {video_name}")
+            except Exception as e:
+                logger.warning(f"从URL提取文件名失败: {str(e)}")
+
+        # 如果仍然无法获取文件名，使用URL的哈希值
+        if not video_name:
+            url_hash = hashlib.md5(url.encode()).hexdigest()
+            video_name = f"{url_hash}.mp4"
+            logger.info(f"无法获取原始文件名，使用URL哈希值作为文件名: {video_name}")
+
+        # 确保文件名是安全的，处理非法字符
+        import re
+        video_name = re.sub(r'[\\/*?:"<>|]', '_', video_name)  # 替换Windows不支持的文件名字符
+
         local_path = os.path.join(local_cache_dir, video_name)
 
         # 如果缓存中已有该视频，直接返回
@@ -213,6 +255,21 @@ class ReIDProcessor:
             logger.info(f"开始下载视频: {url}")
             response = requests.get(url, stream=True)
             response.raise_for_status()
+
+            # 尝试从响应头中获取文件名(如果有Content-Disposition)
+            if not original_filename and 'Content-Disposition' in response.headers:
+                import re
+                content_disposition = response.headers['Content-Disposition']
+                filename_match = re.search(r'filename="?([^"]+)"?', content_disposition)
+                if filename_match:
+                    new_video_name = filename_match.group(1)
+                    new_video_name = re.sub(r'[\\/*?:"<>|]', '_', new_video_name)  # 安全处理
+
+                    # 只有当文件名看起来有效时才使用它
+                    if new_video_name and '.' in new_video_name:
+                        video_name = new_video_name
+                        local_path = os.path.join(local_cache_dir, video_name)
+                        logger.info(f"从响应头获取新文件名: {video_name}")
 
             # 保存视频到本地
             with open(local_path, 'wb') as f:
