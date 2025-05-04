@@ -1,26 +1,25 @@
 import request from '../util/request'
 
 // 视频跟踪相关 API
-export const trackByVideo = (data) => {
+export function trackHistoryVideo (params) {
   return request({
+    url: '/trackHistoryVideo',
     method: 'post',
-    url: '/trackByVideo',
-    data: data
+    data: params,
+    headers: {
+      'Content-Type': 'application/json'
+    }
   })
 }
 
-export const realtimeTrackType = (data) => {
+// 停止目标跟踪
+export function stopTrackingRequest () {
   return request({
+    url: '/stopTrack',
     method: 'post',
-    url: '/realtimeTrackType',
-    data: data
-  })
-}
-
-export const stopDetection = () => {
-  return request({
-    method: 'post',
-    url: '/stopDetection'
+    headers: {
+      'Content-Type': 'application/json'
+    }
   })
 }
 

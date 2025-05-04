@@ -128,7 +128,7 @@
       </span>
     </el-dialog>
 
-    <!-- 历史录像对话框 -->
+    <!-- 历史录像对话框部分需要修改的代码 -->
     <el-dialog
       title="历史录像"
       :visible.sync="historyVideoDialogVisible"
@@ -141,17 +141,38 @@
         <div class="history-video-content">
           <div class="video-container">
             <div v-if="videoUrl" class="video-player">
-              <video controls autoplay class="camera-video">
+              <!-- 普通视频播放器 -->
+              <video
+                v-if="!isTracking || isLoadingTracking"
+                ref="historyVideo"
+                controls
+                autoplay
+                class="camera-video">
                 <source :src="videoUrl" type="video/mp4">
                 您的浏览器不支持视频播放
               </video>
+
+              <!-- 跟踪结果视频流 - 修改为使用controls属性 -->
+              <video
+                v-if="isTracking && trackingStreamUrl"
+                ref="trackingVideo"
+                controls
+                autoplay
+                class="camera-video tracking-video">
+                <source :src="trackingStreamUrl" type="video/mp4">
+                您的浏览器不支持视频播放
+              </video>
+
+              <!-- 添加加载指示器 -->
+              <div v-if="isLoadingTracking" class="tracking-loading">
+                <el-loading type="primary" text="目标跟踪处理中..."></el-loading>
+              </div>
             </div>
             <div v-else class="no-video">
               <i class="el-icon-video-camera"></i>
               <p>请选择日期和时间段查看录像</p>
             </div>
           </div>
-
           <div class="video-controls">
             <el-form :inline="true" class="time-select-form">
               <el-form-item label="日期">
@@ -177,6 +198,24 @@
                   </el-option>
                 </el-select>
               </el-form-item>
+              <!-- 添加目标跟踪按钮 -->
+              <el-form-item v-if="videoUrl">
+                <el-button
+                  :type="isTracking ? 'danger' : 'primary'"
+                  :loading="isLoadingTracking"
+                  @click="toggleTracking">
+                  {{ isTracking ? '停止跟踪' : '目标跟踪' }}
+                </el-button>
+
+                <!-- 添加跟踪参数设置按钮 -->
+                <el-button
+                  type="info"
+                  icon="el-icon-setting"
+                  @click="showTrackingSettingsDialog"
+                  :disabled="isTracking">
+                  跟踪设置
+                </el-button>
+              </el-form-item>
             </el-form>
           </div>
         </div>
@@ -185,6 +224,99 @@
         <el-button @click="closeHistoryVideoDialog">关闭</el-button>
       </span>
     </el-dialog>
+
+    <!-- 新增：跟踪设置对话框 -->
+    <el-dialog
+      title="目标跟踪设置"
+      :visible.sync="trackingSettingsVisible"
+      width="500px">
+      <el-form label-width="120px" :model="trackingSettings">
+        <el-form-item label="跟踪算法">
+          <el-select v-model="trackingSettings.tracker" placeholder="选择跟踪算法">
+            <el-option label="BoTSORT" value="botsort.yaml"></el-option>
+            <el-option label="ByteTrack" value="bytetrack.yaml"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="置信度阈值">
+          <el-slider v-model="trackingSettings.conf" :min="0.1" :max="1" :step="0.05" show-input></el-slider>
+        </el-form-item>
+        <el-form-item label="IoU阈值">
+          <el-slider v-model="trackingSettings.iou" :min="0.1" :max="1" :step="0.05" show-input></el-slider>
+        </el-form-item>
+        <el-form-item label="轨迹长度">
+          <el-slider v-model="trackingSettings.maxTraceLength" :min="10" :max="100" :step="5" show-input></el-slider>
+        </el-form-item>
+        <el-form-item label="处理分辨率">
+          <el-select v-model="trackingSettings.imgSize" placeholder="选择处理分辨率">
+            <el-option label="640x480" value="[640, 480]"></el-option>
+            <el-option label="1280x720" value="[1280, 720]"></el-option>
+            <el-option label="1920x1080" value="[1920, 1080]"></el-option>
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <span slot="footer" class="dialog-footer">
+        <el-button @click="trackingSettingsVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveTrackingSettings">确定</el-button>
+      </span>
+    </el-dialog>
+
+    <!-- 自定义跟踪对话框 -->
+    <div v-if="isTracking" class="custom-tracking-dialog">
+      <!-- 全屏跟踪对话框 -->
+      <div v-show="trackingDialogVisible" class="tracking-dialog-container">
+        <div class="tracking-header">
+          <span class="dialog-title">目标跟踪</span>
+          <div class="dialog-actions">
+            <el-button size="mini" icon="el-icon-minus" @click="minimizeTrackingDialog"></el-button>
+          </div>
+        </div>
+
+        <div class="tracking-content">
+          <video v-if="trackingStreamUrl && !isLoadingTracking"
+                 :src="trackingStreamUrl"
+                 controls
+                 autoplay
+                 class="tracking-video">
+          </video>
+          <div v-else class="loading-container">
+            <el-progress type="circle" :percentage="50" status="warning"></el-progress>
+            <p>正在进行目标跟踪处理，请稍候...</p>
+          </div>
+        </div>
+
+        <div class="tracking-footer">
+          <el-button @click="minimizeTrackingDialog" icon="el-icon-minus" type="primary">最小化</el-button>
+          <el-button @click="stopTracking" type="danger" icon="el-icon-video-pause">停止跟踪</el-button>
+        </div>
+      </div>
+
+      <!-- 修改最小化浮动框视频控制 -->
+      <div v-if="isTrackingMinimized" class="tracking-minimized-box">
+        <div class="tracking-minimized-header" @click="restoreTrackingDialog">
+          <i class="el-icon-video-camera"></i>
+          <span>{{ isLoadingTracking ? '正在处理目标跟踪...' : '目标跟踪' }}</span>
+          <i class="el-icon-arrow-up"></i>
+        </div>
+        <div class="tracking-minimized-controls">
+          <video
+            v-if="trackingStreamUrl"
+            ref="minimizedTrackingVideo"
+            class="tracking-minimized-video"
+            controls
+            :src="trackingStreamUrl">
+          </video>
+          <div v-else class="tracking-minimized-placeholder">
+            <i class="el-icon-loading" v-if="isLoadingTracking"></i>
+            <span>{{ isLoadingTracking ? '处理中...' : '无视频' }}</span>
+          </div>
+          <div class="tracking-minimized-actions">
+            <el-button size="mini" type="text" @click="stopTracking">
+              <i class="el-icon-close"></i> 停止
+            </el-button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -196,7 +328,9 @@ import {
   addCamera,
   updateCamera,
   deleteCamera,
-  getCameraVideos
+  getCameraVideos,
+  trackHistoryVideo,
+  stopTrackingRequest
 } from '../api/api'
 
 export default {
@@ -207,6 +341,8 @@ export default {
   },
   data () {
     return {
+      // 其他状态...
+      isTrackingMinimized: false,
       // 摄像头列表和搜索
       cameras: [],
       searchQuery: '',
@@ -229,6 +365,24 @@ export default {
 
       // 添加监控状态属性
       isMonitoring: true,
+
+      // 跟踪对话框
+      trackingDialogVisible: false,
+      loadingText: '目标跟踪处理中...',
+
+      // 跟踪相关状态
+      isTracking: false,
+      isLoadingTracking: false,
+      trackingStreamUrl: '',
+      trackingInterval: null,
+      trackingSettingsVisible: false,
+      trackingSettings: {
+        tracker: 'botsort.yaml',
+        conf: 0.5,
+        iou: 0.5,
+        maxTraceLength: 30,
+        imgSize: '[1280, 720]'
+      },
 
       // 添加/编辑摄像头对话框
       cameraForm: {
@@ -271,10 +425,32 @@ export default {
     this.loadBaiduMapApi()
   },
   beforeDestroy () {
-    // 确保在组件销毁前停止所有视频流
+    // 确保在组件销毁前停止所有视频流和跟踪任务
     this.stopLiveVideo()
+    this.stopTracking()
   },
   methods: {
+    // 最小化跟踪对话框
+    minimizeTrackingDialog () {
+      this.isTrackingMinimized = true
+      this.trackingDialogVisible = false
+    },
+
+    // 恢复跟踪对话框 - 修复版
+    restoreTrackingDialog () {
+      // 只切换UI状态，不调用任何停止逻辑
+      this.isTrackingMinimized = false
+      this.trackingDialogVisible = true
+    },
+
+    // 处理跟踪对话框关闭事件 - 修复版
+    handleTrackingDialogClose (done) {
+      // 防止直接关闭，改为最小化
+      this.minimizeTrackingDialog()
+      // 重要：阻止默认关闭行为
+      return false
+    },
+
     // 加载百度地图API
     loadBaiduMapApi () {
       // 检查是否已经加载过百度地图API
@@ -434,6 +610,9 @@ export default {
 
     // 显示历史视频
     showHistoryVideo (cameraId) {
+      // 停止可能正在进行的跟踪
+      this.stopTracking()
+
       // 重置视频相关状态
       this.selectedDate = ''
       this.selectedTimeRange = null
@@ -454,13 +633,14 @@ export default {
 
     // 关闭历史视频对话框
     closeHistoryVideoDialog () {
+      this.stopTracking()
       this.historyVideoDialogVisible = false
       this.videoUrl = ''
     },
 
     // 打开实时监控
     openLiveVideo (cameraId) {
-    // 确保选中对应的摄像头
+      // 确保选中对应的摄像头
       if (!this.selectedCamera || this.selectedCamera.camera_id !== cameraId) {
         const camera = this.cameras.find(c => c.camera_id === cameraId)
         if (camera) {
@@ -502,6 +682,7 @@ export default {
     // 关闭所有视频对话框
     closeAllVideoDialogs () {
       this.stopLiveVideo()
+      this.stopTracking()
       this.liveVideoDialogVisible = false
       this.historyVideoDialogVisible = false
       this.videoUrl = ''
@@ -560,9 +741,10 @@ export default {
     },
 
     // 加载历史视频
-    // 修改 frontend/src/views/CameraManagement.vue 中的 loadVideo 方法
-
     loadVideo () {
+      // 停止可能正在进行的跟踪
+      this.stopTracking()
+
       if (!this.selectedCamera || !this.selectedDate || !this.selectedTimeRange) {
         this.videoUrl = ''
         return
@@ -575,6 +757,153 @@ export default {
       }
 
       this.videoUrl = timeRange.video_path
+    },
+
+    // 切换目标跟踪状态
+    toggleTracking () {
+      if (this.isTracking) {
+        this.stopTracking()
+      } else {
+        this.startTracking()
+      }
+    },
+
+    // 开始目标跟踪
+    startTracking () {
+      if (!this.videoUrl) {
+        this.$message.warning('请先选择一个视频')
+        return
+      }
+
+      if (this.isTracking) return
+
+      this.isTracking = true
+      this.isLoadingTracking = true
+
+      // 显示跟踪对话框
+      this.trackingDialogVisible = true
+      this.isTrackingMinimized = false
+
+      // 准备跟踪参数，确保数值类型正确
+      const trackingParams = {
+        videoPath: this.videoUrl,
+        tracker: this.trackingSettings.tracker,
+        conf: parseFloat(this.trackingSettings.conf),
+        iou: parseFloat(this.trackingSettings.iou),
+        maxTraceLength: parseInt(this.trackingSettings.maxTraceLength),
+        imgSize: this.trackingSettings.imgSize
+      }
+
+      // 调用API进行目标跟踪
+      trackHistoryVideo(trackingParams)
+        .then(response => {
+          this.isLoadingTracking = false
+          if (response.data && response.data.status === 'success') {
+            // 确保正确获取处理后的视频URL
+            this.trackingStreamUrl = response.data.tracking_video_url
+            this.$message.success('目标跟踪成功')
+
+            // 确保视频元素更新
+            this.$nextTick(() => {
+              // 更新视频元素时确保它有controls属性
+              const videoElements = [
+                this.$refs.trackingVideo,
+                this.$refs.minimizedTrackingVideo
+              ]
+
+              videoElements.forEach(videoElement => {
+                if (videoElement) {
+                  videoElement.load()
+                  // 确保视频控件可交互
+                  videoElement.controls = true
+                }
+              })
+            })
+          } else {
+            this.stopTracking()
+            this.$message.error(`目标跟踪失败: ${response.data ? response.data.message : '未知错误'}`)
+          }
+        })
+        .catch(error => {
+          console.error('跟踪错误:', error)
+          this.isLoadingTracking = false
+          this.stopTracking()
+          this.$message.error(`目标跟踪错误: ${error.message || '未知错误'}`)
+        })
+    },
+
+    // 停止目标跟踪
+    stopTracking () {
+      if (!this.isTracking) return
+
+      this.$confirm('确定要停止目标跟踪吗?', '提示', {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }).then(() => {
+        // 清理UI状态
+        this.trackingDialogVisible = false
+        this.isTrackingMinimized = false
+
+        // 调用后端停止跟踪接口
+        stopTrackingRequest()
+        // 处理视频保存和对话框关闭逻辑
+        if (this.trackingStreamUrl && !this.isLoadingTracking) {
+          // 提示用户是否需要保存视频...
+        } else {
+          // 直接重置状态
+          this.isTracking = false
+          this.isLoadingTracking = false
+          this.trackingStreamUrl = ''
+        }
+      })
+        .catch(error => {
+          console.error('停止跟踪失败:', error)
+          this.$message.error('停止跟踪失败，请稍后再试')
+
+          // 即使停止失败，也需要清理前端状态
+          this.trackingDialogVisible = false
+          this.isTracking = false
+          this.isLoadingTracking = false
+          this.trackingStreamUrl = ''
+        })
+    },
+
+    // 显示跟踪设置对话框
+    showTrackingSettingsDialog () {
+      this.trackingSettingsVisible = true
+    },
+
+    // 保存跟踪设置
+    saveTrackingSettings () {
+      // 验证设置值
+      if (this.trackingSettings.conf < 0.1 || this.trackingSettings.conf > 1) {
+        this.$message.warning('置信度阈值必须在0.1-1之间')
+        return
+      }
+
+      if (this.trackingSettings.iou < 0.1 || this.trackingSettings.iou > 1) {
+        this.$message.warning('IoU阈值必须在0.1-1之间')
+        return
+      }
+
+      // 保存设置
+      this.$message.success('跟踪设置已保存')
+      this.trackingSettingsVisible = false
+
+      // 如果正在跟踪，需要重新启动跟踪以应用新设置
+      if (this.isTracking) {
+        this.$confirm('新设置需要重新启动跟踪才能生效，是否立即应用?', '提示', {
+          confirmButtonText: '是',
+          cancelButtonText: '否',
+          type: 'warning'
+        }).then(() => {
+          this.stopTracking()
+          this.startTracking()
+        }).catch(() => {
+          // 用户选择不立即应用新设置
+        })
+      }
     }
   }
 }
@@ -687,10 +1016,13 @@ export default {
   align-items: center;
 }
 
-.camera-video {
+/* 确保视频控件始终可见和可操作 */
+.camera-video, .tracking-video {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  z-index: 10;
+  position: relative;
 }
 
 .video-controls {
@@ -714,4 +1046,107 @@ export default {
   display: flex;
   justify-content: center;
 }
+
+.dialog-footer {
+  text-align: right;
+}
+
+.tracking-video .tracking-loading .el-loading::after {
+  content: "目标跟踪处理中...";
+  color: #fff;
+  font-size: 16px;
+  margin-left: 10px;
+}
+
+.tracking-video .tracking-loading .el-loading::before {
+  content: "";
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background-color: #409EFF;
+  margin-right: 5px;
+}
+
+/* 确保加载指示器不会阻碍视频控件的交互 */
+.tracking-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 5; /* 低于视频的z-index */
+  pointer-events: none; /* 允许点击事件穿透 */
+}
+
+/* 添加到样式部分 */
+.custom-tracking-dialog {
+  position: fixed;
+  z-index: 3000;
+}
+
+.tracking-dialog-container {
+  position: fixed;
+  top: 5%;
+  left: 10%;
+  width: 80%;
+  height: 80%;
+  background: white;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  z-index: 3001;
+}
+
+.tracking-header {
+  padding: 15px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #eee;
+}
+
+.tracking-content {
+  flex: 1;
+  padding: 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.tracking-footer {
+  padding: 10px 20px;
+  text-align: right;
+  border-top: 1px solid #eee;
+}
+
+.tracking-minimized-box {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  padding: 10px 15px;
+  background: rgba(64, 158, 255, 0.9);
+  color: white;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 3002;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s ease;
+}
+
+.tracking-minimized-box:hover {
+  transform: translateY(-3px);
+}
+
+.minimized-content .el-icon-full-screen {
+  margin-left: 8px;
+}
+
 </style>
