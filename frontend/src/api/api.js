@@ -23,6 +23,30 @@ export function stopTrackingRequest () {
   })
 }
 
+// 打开包含视频文件的文件夹
+export function openFolder (path) {
+  return request({
+    url: '/openFolder',
+    method: 'post',
+    data: { path },
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  })
+}
+
+// 在本地播放器中播放视频
+export function playInLocalPlayer (path) {
+  return request({
+    url: '/playInLocalPlayer',
+    method: 'post',
+    data: { path },
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  })
+}
+
 // 轨迹可视化相关 API
 export const filterRecords = (data) => {
   return request({

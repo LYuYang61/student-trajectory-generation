@@ -1,6 +1,7 @@
 import base64
 import logging
 import os
+import time
 import traceback
 from datetime import datetime, timedelta
 
@@ -23,7 +24,7 @@ from flask_cors import CORS, cross_origin
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-app = Flask(__name__)
+app = Flask(__name__, static_folder='.')
 CORS(app, supports_credentials=True, resource={r'/*': {'origins': '*'}})
 socketio = SocketIO(app, cors_allowed_origins="*")  # 允许任何来源的连接
 detection_running = True
@@ -52,14 +53,8 @@ query_filter = QueryFilter(db_interface)
 reid_processor = ReIDProcessor()
 campus_map = nx.Graph()  # 可以从文件或数据库加载校园地图
 spatiotemporal_analyzer = SpatiotemporalAnalysis(campus_map)
-
-# Paths for saving result images and videos
-image_result_path = "./results/images/results.jpg"
-video_result_path = "./results/videos/results.mp4"
-
 # 创建全局跟踪器实例
 person_tracker = None
-
 @app.route('/')
 def hello_world():
     return 'Hello World'
@@ -80,7 +75,7 @@ def stop_track():
 @app.route('/trackHistoryVideo', methods=['POST'])
 def track_by_video():
     try:
-        # 创建上传目录（如果不存在）
+        # 创建上传目录
         os.makedirs('uploads', exist_ok=True)
 
         # 处理文件上传或视频URL
@@ -96,59 +91,49 @@ def track_by_video():
             # 处理视频URL
             video_url = request.form.get('videoUrl')
             logger.info(f"收到视频URL: {video_url}")
-
-            if video_url.startswith(('http://', 'https://')):
+            # 本地路径处理
+            if os.path.exists(video_url):
+                video_path = video_url
+            else:
+                # 远程URL需要下载
+                import requests
+                filename = os.path.basename(video_url)
+                video_path = os.path.join('uploads', filename)
+                logger.info(f"正在下载视频: {video_url} 到 {video_path}")
                 try:
-                    # 从URL下载视频
-                    import requests
-                    video_name = os.path.basename(video_url.split('?')[0])
-                    video_path = os.path.join('uploads', video_name)
-
-                    # 下载视频文件
-                    logger.info(f"正在下载视频: {video_url} 到 {video_path}")
                     response = requests.get(video_url, stream=True)
                     response.raise_for_status()
-
                     with open(video_path, 'wb') as f:
                         for chunk in response.iter_content(chunk_size=8192):
                             f.write(chunk)
-
                     logger.info(f"视频下载成功: {video_path}")
-                except Exception as download_err:
-                    logger.error(f"下载视频失败: {str(download_err)}")
-                    return jsonify({'status': 'error', 'message': f'下载视频失败: {str(download_err)}'})
-            else:
-                # 本地路径
-                video_path = video_url
-                if not os.path.exists(video_path):
-                    logger.error(f"未找到本地视频文件: {video_path}")
-                    return jsonify({'status': 'error', 'message': f'未找到视频文件: {video_path}'})
+                except Exception as e:
+                    logger.error(f"视频下载失败: {str(e)}")
+                    return jsonify({'status': 'error', 'message': f'视频下载失败: {str(e)}'})
         elif 'videoPath' in request.json:
             # 处理JSON中的视频路径
             video_url = request.json.get('videoPath')
             logger.info(f"从JSON收到视频路径: {video_url}")
 
-            if video_url.startswith(('http://', 'https://')):
+            if os.path.exists(video_url):
+                # 如果是本地文件
+                video_path = video_url
+            else:
+                # 远程URL需要下载
+                import requests
+                filename = os.path.basename(video_url)
+                video_path = os.path.join('uploads', filename)
+                logger.info(f"正在下载视频: {video_url} 到 {video_path}")
                 try:
-                    # 同上
-                    import requests
-                    video_name = os.path.basename(video_url.split('?')[0])
-                    video_path = os.path.join('uploads', video_name)
-
-                    logger.info(f"正在下载视频: {video_url} 到 {video_path}")
                     response = requests.get(video_url, stream=True)
                     response.raise_for_status()
-
                     with open(video_path, 'wb') as f:
                         for chunk in response.iter_content(chunk_size=8192):
                             f.write(chunk)
-
                     logger.info(f"视频下载成功: {video_path}")
-                except Exception as download_err:
-                    logger.error(f"下载视频失败: {str(download_err)}")
-                    return jsonify({'status': 'error', 'message': f'下载视频失败: {str(download_err)}'})
-            else:
-                video_path = video_url
+                except Exception as e:
+                    logger.error(f"视频下载失败: {str(e)}")
+                    return jsonify({'status': 'error', 'message': f'视频下载失败: {str(e)}'})
         else:
             logger.error("请求中未提供视频")
             return jsonify({'status': 'error', 'message': '未提供视频，请检查请求参数'})
@@ -179,16 +164,21 @@ def track_by_video():
         except:
             img_size = [1280, 720]
 
-        # 设置输出目录
-        output_dir = os.path.join("tracking_results", datetime.now().strftime("%Y%m%d_%H%M%S"))
+        # 使用原始视频文件名创建结果文件名
+        timestamp = int(time.time())
+        video_basename = os.path.basename(video_path)
+        video_name = os.path.splitext(video_basename)[0]
+        output_dir = os.path.join("tracking_results", video_name)
         os.makedirs(output_dir, exist_ok=True)
+        result_filename = f"{video_name}_tracked_{timestamp}.mp4"
+        result_path = os.path.join(output_dir, result_filename)
 
         global person_tracker
         try:
             params = {
-                'model_path': "D:/lyycode02/student-trajectory-generation/backend/resources/models/yolov8m.pt",  # 确保这里使用正确的默认值
-                'device': 'cpu', # 根据实际情况选择 'cpu' 或 'cuda:0'
-                'show': False
+                'model_path': "D:/lyycode02/student-trajectory-generation/backend/resources/models/yolov8m.pt",
+                'device': 'cpu',
+                'show': True
             }
 
             # 创建跟踪器并处理视频
@@ -203,25 +193,31 @@ def track_by_video():
 
             logger.info(f"开始处理视频: {video_path}")
             # 执行跟踪
-            result_path = person_tracker.track_people(
+            tracked_video_path = person_tracker.track_people(
                 source=video_path,
                 show=params['show'],
                 max_trace_length=max_trace_length,
                 save_dir=output_dir
             )
 
-            if result_path and os.path.exists(result_path):
-                # 返回结果视频的URL
-                result_url = f"/tracking_results/{os.path.basename(output_dir)}/results.mp4"
-                logger.info(f"视频处理完成，结果路径: {result_url}")
+            # 重命名结果文件以匹配原始视频名称
+            if tracked_video_path and os.path.exists(tracked_video_path):
+                # 如果路径不是已经设置的result_path，则重命名
+                if tracked_video_path != result_path:
+                    os.rename(tracked_video_path, result_path)
+                    tracked_video_path = result_path
+
+                # 返回本地文件路径而非OSS URL
+                logger.info(f"视频处理完成，保存在: {tracked_video_path}")
                 return jsonify({
                     'status': 'success',
                     'message': '视频处理完成',
-                    'tracking_video_url': result_url
+                    'tracking_video_path': tracked_video_path,  # 返回本地文件路径
                 })
             else:
                 logger.error("处理完成但结果文件不存在")
                 return jsonify({'status': 'error', 'message': '视频处理失败，结果文件不存在'})
+
         except Exception as proc_err:
             logger.error(f"视频处理过程中出错: {str(proc_err)}\n{traceback.format_exc()}")
             return jsonify({'status': 'error', 'message': f'视频处理出错: {str(proc_err)}'})
@@ -230,6 +226,74 @@ def track_by_video():
         logger.error(f"视频跟踪错误: {str(e)}\n{traceback.format_exc()}")
         return jsonify({'status': 'error', 'message': f'视频处理出错: {str(e)}'})
 
+
+@app.route('/openFolder', methods=['POST'])
+def open_folder():
+    """打开包含视频文件的文件夹"""
+    try:
+        data = request.json
+        file_path = data.get('path')
+
+        if not file_path:
+            return jsonify({'status': 'error', 'message': '未提供文件路径'})
+
+        # 获取文件所在目录
+        folder_path = os.path.dirname(os.path.abspath(file_path))
+
+        # 检查目录是否存在
+        if not os.path.exists(folder_path):
+            return jsonify({'status': 'error', 'message': f'目录不存在: {folder_path}'})
+
+        # 根据操作系统打开文件夹
+        import platform
+        import subprocess
+
+        system = platform.system()
+        if system == 'Windows':
+            os.startfile(folder_path)
+        elif system == 'Darwin':  # macOS
+            subprocess.call(['open', folder_path])
+        else:  # Linux
+            subprocess.call(['xdg-open', folder_path])
+
+        return jsonify({'status': 'success', 'message': f'已打开文件夹: {folder_path}'})
+
+    except Exception as e:
+        logger.error(f"打开文件夹失败: {str(e)}")
+        return jsonify({'status': 'error', 'message': f'打开文件夹失败: {str(e)}'})
+
+
+@app.route('/playInLocalPlayer', methods=['POST'])
+def play_in_local_player():
+    """在本地播放器中播放视频"""
+    try:
+        data = request.json
+        file_path = data.get('path')
+
+        if not file_path:
+            return jsonify({'status': 'error', 'message': '未提供文件路径'})
+
+        # 检查文件是否存在
+        if not os.path.exists(file_path):
+            return jsonify({'status': 'error', 'message': f'文件不存在: {file_path}'})
+
+        # 使用系统默认程序打开视频文件
+        import platform
+        import subprocess
+
+        system = platform.system()
+        if system == 'Windows':
+            os.startfile(file_path)
+        elif system == 'Darwin':  # macOS
+            subprocess.call(['open', file_path])
+        else:  # Linux
+            subprocess.call(['xdg-open', file_path])
+
+        return jsonify({'status': 'success', 'message': f'已在本地播放器中打开视频: {file_path}'})
+
+    except Exception as e:
+        logger.error(f"在本地播放器中播放视频失败: {str(e)}")
+        return jsonify({'status': 'error', 'message': f'在本地播放器中播放视频失败: {str(e)}'})
 
 @app.route('/filter', methods=['POST'])
 def filter_records():
