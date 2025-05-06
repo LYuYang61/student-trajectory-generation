@@ -337,3 +337,14 @@ class DatabaseInterface:
             self.conn.rollback()
             return -1
 
+    def reconnect(self):
+        """重新连接数据库"""
+        try:
+            if self.conn:
+                self.conn.close()
+            self.connect()
+            logger.info("Reconnected to database")
+        except Exception as e:
+            logger.error(f"Failed to reconnect to database: {e}")
+            raise
+

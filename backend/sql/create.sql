@@ -63,4 +63,15 @@ ADD CONSTRAINT fk_student
 FOREIGN KEY (student_id) REFERENCES students(student_id)
 ON DELETE CASCADE ON UPDATE CASCADE;
 
+CREATE TABLE users (
+    user_id INT PRIMARY KEY AUTO_INCREMENT,     -- 用户唯一 ID
+    username VARCHAR(50) NOT NULL UNIQUE,       -- 用户名（唯一）
+    password_hash VARCHAR(255) NOT NULL,        -- 密码哈希值
+    role ENUM('admin', 'user') NOT NULL,        -- 用户角色：管理员 / 普通用户
+    real_name VARCHAR(100),                     -- 真实姓名
+    email VARCHAR(100),                         -- 邮箱地址
+    phone VARCHAR(20),                          -- 电话
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP, -- 注册时间
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP -- 更新时间
+);
 

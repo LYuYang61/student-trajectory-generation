@@ -5,6 +5,7 @@ import store from './store'
 
 import ElementUI from 'element-ui'
 import 'element-ui/lib/theme-chalk/index.css'
+import http from './util/http'
 
 import {VUE_SOCKET_IO} from './util/socket'
 
@@ -17,6 +18,7 @@ Vue.use(ElementUI)
 Vue.use(VUE_SOCKET_IO)
 
 Vue.config.productionTip = false
+Vue.prototype.$http = http
 
 new Vue({
   router,

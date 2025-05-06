@@ -4,7 +4,10 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta
+from functools import wraps
 
+import bcrypt
+import jwt
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -28,6 +31,7 @@ app = Flask(__name__, static_folder='.')
 CORS(app, supports_credentials=True, resource={r'/*': {'origins': '*'}})
 socketio = SocketIO(app, cors_allowed_origins="*")  # 允许任何来源的连接
 detection_running = True
+app.config['SECRET_KEY'] = 'lian'  # 推荐使用随机生成的密钥
 
 
 # 初始化各模块
@@ -1300,6 +1304,150 @@ def import_students():
         logger.error(f"Error importing students: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+
+# JWT验证装饰器
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        auth_header = request.headers.get('Authorization')
+
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(" ")[1]
+
+        if not token:
+            return jsonify({'message': '缺少令牌！', 'success': False}), 401
+
+        try:
+            payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = payload
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': '令牌已过期！', 'success': False}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'message': '无效的令牌！', 'success': False}), 401
+
+        return f(current_user, *args, **kwargs)
+
+    return decorated
+
+
+# 用户注册
+@app.route('/auth/register', methods=['POST'])
+def register():
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        email = data.get('email')
+        phone = data.get('phone')
+        real_name = data.get('realName')
+
+        if not username or not password:
+            return jsonify({'message': '用户名和密码不能为空', 'success': False}), 400
+
+        # 确保数据库连接有效
+        if db_interface.conn.open is False:
+            db_interface.reconnect()
+
+        cursor = db_interface.conn.cursor()
+
+        # 检查用户名是否已存在
+        cursor.execute("SELECT username FROM users WHERE username = %s", (username,))
+        if cursor.fetchone():
+            return jsonify({'message': '用户名已存在', 'success': False}), 400
+
+        # 加密密码
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        # 插入新用户 - 注意字段名为 password_hash
+        cursor.execute(
+            "INSERT INTO users (username, password_hash, real_name, email, phone, role) VALUES (%s, %s, %s, %s, %s, %s)",
+            (username, hashed_password, real_name, email, phone, 'user')
+        )
+        db_interface.conn.commit()
+
+        return jsonify({'message': '注册成功', 'success': True}), 201
+
+    except Exception as e:
+        logger.error(f"注册出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'message': f'注册错误: {str(e)}', 'success': False}), 500
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+
+
+# 用户登录
+@app.route('/auth/login', methods=['POST'])
+def login():
+    try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+
+        if not username or not password:
+            return jsonify({'message': '用户名和密码不能为空', 'success': False}), 400
+
+        # 确保数据库连接有效
+        if db_interface.conn.open is False:
+            db_interface.reconnect()  # 确保有重连方法
+
+        cursor = db_interface.conn.cursor()
+
+        # 修改SQL查询以匹配你的表结构
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+
+        columns = [desc[0] for desc in cursor.description]
+        user_data = cursor.fetchone()
+
+        if not user_data:
+            return jsonify({'message': '用户不存在', 'success': False}), 401
+
+        # 将查询结果转换为字典
+        user = dict(zip(columns, user_data))
+
+        # 使用正确的字段名 password_hash 而不是 password
+        if bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
+            token_payload = {
+                'user_id': user['user_id'],
+                'username': user['username'],
+                'exp': datetime.utcnow() + timedelta(hours=24)
+            }
+            token = jwt.encode(token_payload, app.config.get('SECRET_KEY', 'your-secret-key'), algorithm="HS256")
+
+            # 返回不包含密码的用户信息
+            user_info = {k: v for k, v in user.items() if k != 'password_hash'}
+
+            return jsonify({
+                'success': True,
+                'message': '登录成功',
+                'token': token,
+                'user': user_info
+            })
+        else:
+            return jsonify({'message': '密码错误', 'success': False}), 401
+
+    except Exception as e:
+        logger.error(f"登录出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'message': f'登录错误: {str(e)}', 'success': False}), 500
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+
+
+# 获取当前用户信息
+@app.route('/auth/user', methods=['GET'])
+@token_required
+def get_user_info(current_user):
+    return jsonify({
+        'success': True,
+        'user': {
+            'user_id': current_user['user_id'],
+            'username': current_user['username'],
+            'role': current_user['role']
+        }
+    })
 
 if __name__ == '__main__':
     socketio.run(app, host="0.0.0.0", debug=True, port=5000, allow_unsafe_werkzeug=True)

@@ -38,7 +38,7 @@
           <span>学生轨迹追踪</span>
         </div>
         <div class="btn-content">
-          <p>还原指定学生在特定时间段的大致轨迹</p>
+          <p>还原指定学生的大致轨迹</p>
           <p>支持学生关联属性、时间段选择</p>
         </div>
       </el-button>

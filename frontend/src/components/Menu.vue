@@ -1,16 +1,13 @@
 <template>
   <div>
-    <!-- 首页时只显示一个按钮 -->
-    <div v-if="$route.path === '/'" class="home-menu">
+    <!-- 首页时显示简化版菜单 -->
+    <div v-if="$route.path === '/home' || $route.path === '/'" class="home-menu">
       <img class="logo" src="../assets/hfut.png" alt=""/>
-      <el-button type="primary" class="enter-btn" @click="enterSystem">
-        <span>点击进入</span>
-      </el-button>
     </div>
 
-    <!-- 非首页时显示完整菜单 -->
+    <!-- 非首页且已登录时显示完整菜单 -->
     <el-menu
-      v-else
+      v-else-if="isLoggedIn"
       :default-active="$route.path"
       class="el-menu-demo"
       mode="horizontal"
@@ -27,6 +24,11 @@
         <span>返回首页</span>
       </el-button>
     </el-menu>
+
+    <!-- 非首页但未登录时显示仅有logo的菜单 -->
+    <div v-else class="simple-menu">
+      <img class="logo" src="../assets/hfut.png" alt=""/>
+    </div>
   </div>
 </template>
 
@@ -43,10 +45,12 @@ export default {
       ]
     }
   },
+  computed: {
+    isLoggedIn () {
+      return !!localStorage.getItem('token')
+    }
+  },
   methods: {
-    enterSystem () {
-      this.$router.push('/Function')
-    },
     goHome () {
       this.$router.push('/')
     }
@@ -95,6 +99,15 @@ export default {
 .home-menu {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  padding: 0 3%;
+  background-color: rgba(0, 0, 0, 0.525);
+  height: 135px;
+}
+
+/* 简化菜单样式 */
+.simple-menu {
+  display: flex;
   align-items: center;
   padding: 0 3%;
   background-color: rgba(0, 0, 0, 0.525);
