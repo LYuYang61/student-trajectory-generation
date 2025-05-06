@@ -19,10 +19,18 @@
         {{ page.name }}
       </el-menu-item>
 
-      <!-- 返回首页按钮 -->
-      <el-button type="primary" class="home-btn" @click="goHome">
-        <span>返回首页</span>
-      </el-button>
+      <div class="menu-right">
+        <el-dropdown @command="handleCommand" v-if="isLoggedIn">
+          <span class="el-dropdown-link">
+            {{ username }}<i class="el-icon-arrow-down el-icon--right"></i>
+          </span>
+          <el-dropdown-menu slot="dropdown">
+            <el-dropdown-item command="profile">个人信息</el-dropdown-item>
+            <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+          </el-dropdown-menu>
+        </el-dropdown>
+        <el-button v-else type="text" @click="$emit('login')">登录</el-button>
+      </div>
     </el-menu>
 
     <!-- 非首页但未登录时显示仅有logo的菜单 -->
@@ -33,10 +41,13 @@
 </template>
 
 <script>
+// 保持原有脚本不变
 export default {
   name: 'Menu',
   data () {
     return {
+      isLoggedIn: false,
+      username: '',
       pages: [
         {name: '功能介绍', index: '/Function'},
         {name: '学生管理', index: '/StudentManagement'},
@@ -45,14 +56,36 @@ export default {
       ]
     }
   },
-  computed: {
-    isLoggedIn () {
-      return !!localStorage.getItem('token')
-    }
+  created () {
+    // 检查登录状态
+    this.checkLoginStatus()
   },
   methods: {
     goHome () {
       this.$router.push('/')
+    },
+    checkLoginStatus () {
+      const token = localStorage.getItem('token')
+      const user = JSON.parse(localStorage.getItem('user') || '{}')
+
+      if (token && user.username) {
+        this.isLoggedIn = true
+        this.username = user.username
+      } else {
+        this.isLoggedIn = false
+        this.username = ''
+      }
+    },
+    handleCommand (command) {
+      if (command === 'logout') {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        this.isLoggedIn = false
+        this.$message.success('已退出登录')
+        this.$router.push('/')
+      } else if (command === 'profile') {
+        this.$router.push('/profile')
+      }
     }
   }
 }
@@ -69,8 +102,9 @@ export default {
 .el-menu {
   border-bottom: none !important;
   background-color: rgba(0, 0, 0, 0.525);
-  /* margin-right: 3%; */
   position: relative;
+  display: flex;
+  align-items: center;
 }
 
 .el-menu--horizontal > .el-menu-item {
@@ -114,22 +148,17 @@ export default {
   height: 135px;
 }
 
-.enter-btn {
-  position: absolute;
-  right: 3%;
-  font-size: 1.2vw;
-  padding: 10px 20px;
-  border-radius: 8px;
-}
-
-/* 返回首页按钮样式 */
-.home-btn {
+.menu-right {
   position: absolute;
   right: 3%;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 1.2vw;
-  padding: 10px 20px;
-  border-radius: 8px;
+  margin-right: 20px;
+}
+
+.el-dropdown-link {
+  color: #fff;
+  cursor: pointer;
+  font-size: 16px;
 }
 </style>

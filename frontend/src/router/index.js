@@ -5,6 +5,7 @@ import Function from '../views/Function.vue'
 import TrackVisualization from '../views/TrackVisualization'
 import CameraManagement from '../views/CameraManagement'
 import StudentManagement from '../views/StudentManagement.vue'
+import ProfileView from '../views/ProfileView.vue'
 
 Vue.use(VueRouter)
 
@@ -18,6 +19,12 @@ const routes = [
     name: 'Home',
     component: HomeView,
     meta: { requiresAuth: false }
+  },
+  {
+    path: '/profile',
+    name: 'profile',
+    component: ProfileView,
+    meta: { requiresAuth: true }
   },
   {
     path: '/Function',
@@ -46,25 +53,24 @@ const routes = [
 ]
 
 const router = new VueRouter({
+  mode: 'history',
+  base: process.env.BASE_URL,
   routes
 })
 
 // 路由守卫
 router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('token')
-
   if (to.matched.some(record => record.meta.requiresAuth)) {
-    // 需要认证的页面
+    const token = localStorage.getItem('token')
     if (!token) {
       next({
-        path: '/home',
+        path: '/',
         query: { redirect: to.fullPath }
       })
     } else {
       next()
     }
   } else {
-    // 不需要认证的页面
     next()
   }
 })

@@ -1449,5 +1449,131 @@ def get_user_info(current_user):
         }
     })
 
+
+# 获取用户个人信息
+@app.route('/user/profile', methods=['GET'])
+@token_required
+def get_profile(current_user):
+    try:
+        username = current_user.get('username')
+
+        cursor = db_interface.conn.cursor()
+        cursor.execute(
+            "SELECT username, real_name, email, phone FROM users WHERE username = %s",
+            (username,)
+        )
+        user_data = cursor.fetchone()
+        cursor.close()
+
+        if not user_data:
+            return jsonify({
+                'success': False,
+                'message': '未找到用户信息'
+            }), 404
+
+        user_info = {
+            'username': user_data[0],
+            'realName': user_data[1],
+            'email': user_data[2],
+            'phone': user_data[3]
+        }
+
+        return jsonify({
+            'success': True,
+            'user': user_info
+        })
+    except Exception as e:
+        logger.error(f"获取用户信息失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'获取用户信息失败: {str(e)}'
+        }), 500
+
+
+# 更新用户个人信息
+@app.route('/user/profile', methods=['PUT'])
+@token_required
+def update_profile(current_user):
+    try:
+        username = current_user.get('username')
+        data = request.get_json()
+
+        real_name = data.get('realName', '')
+        email = data.get('email', '')
+        phone = data.get('phone', '')
+
+        cursor = db_interface.conn.cursor()
+        cursor.execute(
+            "UPDATE users SET real_name = %s, email = %s, phone = %s WHERE username = %s",
+            (real_name, email, phone, username)
+        )
+        db_interface.conn.commit()
+        cursor.close()
+
+        return jsonify({
+            'success': True,
+            'message': '个人信息更新成功'
+        })
+    except Exception as e:
+        logger.error(f"更新个人信息失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'更新个人信息失败: {str(e)}'
+        }), 500
+
+
+# 修改用户密码
+@app.route('/user/change-password', methods=['PUT'])
+@token_required
+def change_password(current_user):
+    try:
+        username = current_user.get('username')
+        data = request.get_json()
+
+        old_password = data.get('oldPassword', '')
+        new_password = data.get('newPassword', '')
+
+        # 验证当前密码是否正确
+        cursor = db_interface.conn.cursor()
+        cursor.execute("SELECT password_hash FROM users WHERE username = %s", (username,))
+        result = cursor.fetchone()
+
+        if not result:
+            return jsonify({
+                'success': False,
+                'message': '用户不存在'
+            }), 404
+
+        stored_password = result[0]
+
+        # 验证原密码
+        if not bcrypt.checkpw(old_password.encode('utf-8'), stored_password.encode('utf-8')):
+            return jsonify({
+                'success': False,
+                'message': '原密码不正确'
+            }), 400
+
+        # 生成新密码的哈希值
+        hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        # 更新密码
+        cursor.execute(
+            "UPDATE users SET password_hash = %s WHERE username = %s",
+            (hashed_password, username)
+        )
+        db_interface.conn.commit()
+        cursor.close()
+
+        return jsonify({
+            'success': True,
+            'message': '密码更新成功'
+        })
+    except Exception as e:
+        logger.error(f"修改密码失败: {str(e)}")
+        return jsonify({
+            'success': False,
+            'message': f'修改密码失败: {str(e)}'
+        }), 500
+
 if __name__ == '__main__':
     socketio.run(app, host="0.0.0.0", debug=True, port=5000, allow_unsafe_werkzeug=True)
