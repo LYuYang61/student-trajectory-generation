@@ -33,6 +33,7 @@ CREATE TABLE camera_videos (
     start_time TIME, -- 视频开始时间
     end_time TIME, -- 视频结束时间
     video_path VARCHAR(255), -- 视频文件路径
+    tracking_video_path VARCHAR(255), -- 目标跟踪结果视频路径
     FOREIGN KEY (camera_id) REFERENCES cameras(camera_id)
 );
 
@@ -43,3 +44,23 @@ CREATE TABLE student_trajectories (
     trajectory_data BLOB, -- 轨迹数据（以二进制存储）
     timestamp DATETIME -- 时间戳
 );
+
+-- 创建 `students` 表，用于存储学生基本信息
+CREATE TABLE students (
+    student_id VARCHAR(50) PRIMARY KEY,     -- 学生学号，主键
+    name VARCHAR(100) NOT NULL,             -- 姓名
+    gender ENUM('男', '女', '其他') NOT NULL, -- 性别（可根据实际需求拓展）
+    grade VARCHAR(10),                      -- 年级，例如 "2021"
+    major VARCHAR(100),                     -- 专业名称
+    phone VARCHAR(20),                      -- 联系电话
+    email VARCHAR(100),                     -- 电子邮箱
+    birth_date DATE,                        -- 出生日期
+    enrollment_date DATE                    -- 入学日期
+);
+
+ALTER TABLE student_records
+ADD CONSTRAINT fk_student
+FOREIGN KEY (student_id) REFERENCES students(student_id)
+ON DELETE CASCADE ON UPDATE CASCADE;
+
+

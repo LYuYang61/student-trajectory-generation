@@ -5,28 +5,29 @@
       <span>请选择功能</span>
     </div>
     <div class="content">
+      <el-button class="button2" type="info" circle @click="StudentManagement">
+        <div class="btn-icon">
+          <i class="el-icon-school"></i>
+        </div>
+        <div class="btn-title">
+          <span>学生管理</span>
+        </div>
+        <div class="btn-content">
+          <p>对学生的基本信息进行管理</p>
+          <p>支持excel批量导入</p>
+        </div>
+      </el-button>
       <el-button class="button3" type="info" circle @click="CameraManagement">
         <div class="btn-icon">
-          <i class="el-icon-odometer"></i>
+          <i class="el-icon-video-camera"></i>
         </div>
         <div class="btn-title">
           <span>监控管理</span>
         </div>
         <div class="btn-content">
-          <p>对校园监控摄像头名称、位置等信息进行统一管理</p>
-          <p>支持查看特定时间段的监控视频</p>
-        </div>
-      </el-button>
-      <el-button class="button2" type="info" circle @click="TrackByVideo">
-        <div class="btn-icon">
-          <i class="el-icon-video-camera"></i>
-        </div>
-        <div class="btn-title">
-          <span>视频跟踪</span>
-        </div>
-        <div class="btn-content">
-          <p>可上传本地文件中的视频进行跟踪</p>
-          <p>支持mp4, mov等视频格式</p>
+          <p>对校园监控基本信息进行管理</p>
+          <p>支持历史视频观看和多目标跟踪</p>
+          <p>支持查看实时监控</p>
         </div>
       </el-button>
       <el-button class="button4" type="info" circle @click="TrackVisualization">
@@ -60,9 +61,9 @@ export default {
     CameraManagement () {
       this.$router.push({path: '/CameraManagement'})
     },
-    // 视频检测
-    TrackByVideo () {
-      this.$router.push({path: '/TrackByVideo'})
+    // 学生管理
+    StudentManagement () {
+      this.$router.push({path: '/StudentManagement'})
     },
     // 学生轨迹追踪
     TrackVisualization () {
@@ -123,11 +124,6 @@ export default {
   transition: all 0.4s;
   margin: 1% 1%;
   /* text-align: center; */
-}
-
-.button1{
-  background: url("../assets/but1.jpg");
-  background-size: 288px 592px;
 }
 
 .button2{

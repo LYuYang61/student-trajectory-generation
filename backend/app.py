@@ -1014,5 +1014,292 @@ def serve_video(video_path):
         abort(500)
 
 
+# Add these endpoints to your existing Flask app.py
+
+@app.route('/students', methods=['GET'])
+def get_students():
+    """获取学生列表，支持分页"""
+    try:
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('pageSize', 10))
+
+        # 计算偏移量
+        offset = (page - 1) * page_size
+
+        # 获取总数
+        with db_interface.conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM students")
+            total = cursor.fetchone()[0]
+
+        # 分页查询
+        with db_interface.conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM students LIMIT %s OFFSET %s",
+                (page_size, offset)
+            )
+            students = []
+            columns = [col[0] for col in cursor.description]
+            for row in cursor.fetchall():
+                students.append(dict(zip(columns, row)))
+
+        return jsonify({
+            'data': students,
+            'total': total,
+            'page': page,
+            'pageSize': page_size
+        })
+    except Exception as e:
+        logger.error(f"Error getting students: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/students/search', methods=['GET'])
+def search_students():
+    """搜索学生"""
+    try:
+        keyword = request.args.get('keyword', '')
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('pageSize', 10))
+
+        # 计算偏移量
+        offset = (page - 1) * page_size
+
+        # 构建搜索条件（在多个字段中搜索）
+        search_term = f"%{keyword}%"
+
+        # 获取符合条件的总数
+        with db_interface.conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT COUNT(*) FROM students 
+                WHERE student_id LIKE %s 
+                OR name LIKE %s 
+                OR major LIKE %s 
+                OR grade LIKE %s""",
+                (search_term, search_term, search_term, search_term)
+            )
+            total = cursor.fetchone()[0]
+
+        # 分页查询
+        with db_interface.conn.cursor() as cursor:
+            cursor.execute(
+                """SELECT * FROM students 
+                WHERE student_id LIKE %s 
+                OR name LIKE %s 
+                OR major LIKE %s 
+                OR grade LIKE %s 
+                LIMIT %s OFFSET %s""",
+                (search_term, search_term, search_term, search_term, page_size, offset)
+            )
+            students = []
+            columns = [col[0] for col in cursor.description]
+            for row in cursor.fetchall():
+                students.append(dict(zip(columns, row)))
+
+        return jsonify({
+            'data': students,
+            'total': total,
+            'page': page,
+            'pageSize': page_size
+        })
+    except Exception as e:
+        logger.error(f"Error searching students: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/students', methods=['POST'])
+def add_student():
+    """添加单个学生"""
+    try:
+        data = request.json
+        required_fields = ['student_id', 'name', 'gender']
+
+        # 验证必填字段
+        for field in required_fields:
+            if field not in data or not data[field]:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+
+        # 检查学号是否已存在
+        with db_interface.conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM students WHERE student_id = %s", (data['student_id'],))
+            if cursor.fetchone()[0] > 0:
+                return jsonify({'error': 'Student ID already exists'}), 409
+
+        # 构建SQL插入语句
+        fields = ', '.join(data.keys())
+        placeholders = ', '.join(['%s'] * len(data))
+
+        with db_interface.conn.cursor() as cursor:
+            sql = f"INSERT INTO students ({fields}) VALUES ({placeholders})"
+            cursor.execute(sql, list(data.values()))
+            db_interface.conn.commit()
+
+        return jsonify({'message': 'Student added successfully', 'student_id': data['student_id']}), 201
+    except Exception as e:
+        logger.error(f"Error adding student: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/students/<string:student_id>', methods=['PUT'])
+def update_student(student_id):
+    """更新学生信息"""
+    try:
+        data = request.json
+
+        # 检查学生是否存在
+        with db_interface.conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM students WHERE student_id = %s", (student_id,))
+            if cursor.fetchone()[0] == 0:
+                return jsonify({'error': 'Student not found'}), 404
+
+        # 构建SQL更新语句
+        update_fields = []
+        values = []
+
+        for key, value in data.items():
+            if key != 'student_id':  # 不更新学号
+                update_fields.append(f"{key} = %s")
+                values.append(value)
+
+        if not update_fields:
+            return jsonify({'message': 'No fields to update'}), 200
+
+        values.append(student_id)  # WHERE条件的参数
+
+        with db_interface.conn.cursor() as cursor:
+            sql = f"UPDATE students SET {', '.join(update_fields)} WHERE student_id = %s"
+            cursor.execute(sql, values)
+            db_interface.conn.commit()
+
+        return jsonify({'message': 'Student updated successfully'}), 200
+    except Exception as e:
+        logger.error(f"Error updating student: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/students/<string:student_id>', methods=['DELETE'])
+def delete_student(student_id):
+    """删除单个学生"""
+    try:
+        # 检查学生是否存在
+        with db_interface.conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM students WHERE student_id = %s", (student_id,))
+            if cursor.fetchone()[0] == 0:
+                return jsonify({'error': 'Student not found'}), 404
+
+        # 删除学生
+        with db_interface.conn.cursor() as cursor:
+            cursor.execute("DELETE FROM students WHERE student_id = %s", (student_id,))
+            db_interface.conn.commit()
+
+        return jsonify({'message': 'Student deleted successfully'}), 200
+    except Exception as e:
+        logger.error(f"Error deleting student: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/students/batch-delete', methods=['POST'])
+def batch_delete_students():
+    """批量删除学生"""
+    try:
+        data = request.json
+        student_ids = data.get('ids', [])
+
+        if not student_ids:
+            return jsonify({'error': 'No student IDs provided'}), 400
+
+        # 构建SQL删除语句
+        placeholders = ', '.join(['%s'] * len(student_ids))
+
+        with db_interface.conn.cursor() as cursor:
+            sql = f"DELETE FROM students WHERE student_id IN ({placeholders})"
+            cursor.execute(sql, student_ids)
+            db_interface.conn.commit()
+            deleted_count = cursor.rowcount
+
+        return jsonify({
+            'message': f'{deleted_count} students deleted successfully',
+            'count': deleted_count
+        }), 200
+    except Exception as e:
+        logger.error(f"Error batch deleting students: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/students/import', methods=['POST'])
+def import_students():
+    """从Excel导入学生信息"""
+    try:
+        data = request.json
+        students = data.get('students', [])
+
+        if not students:
+            return jsonify({'error': 'No student data provided'}), 400
+
+        # 批量插入或更新学生信息
+        success_count = 0
+        error_count = 0
+        errors = []
+
+        for student in students:
+            try:
+                # 最小必填字段验证
+                if not student.get('student_id') or not student.get('name') or not student.get('gender'):
+                    error_count += 1
+                    errors.append({
+                        'student': student,
+                        'reason': 'Missing required fields (student_id, name, gender)'
+                    })
+                    continue
+
+                # 检查学生是否已存在，存在则更新，不存在则插入
+                with db_interface.conn.cursor() as cursor:
+                    cursor.execute("SELECT COUNT(*) FROM students WHERE student_id = %s",
+                                   (student['student_id'],))
+                    exists = cursor.fetchone()[0] > 0
+
+                with db_interface.conn.cursor() as cursor:
+                    if exists:
+                        # 构建更新语句
+                        update_fields = []
+                        values = []
+
+                        for key, value in student.items():
+                            if key != 'student_id' and value:  # 不更新学号，且值不为空
+                                update_fields.append(f"{key} = %s")
+                                values.append(value)
+
+                        if update_fields:
+                            values.append(student['student_id'])  # WHERE条件的参数
+                            sql = f"UPDATE students SET {', '.join(update_fields)} WHERE student_id = %s"
+                            cursor.execute(sql, values)
+                    else:
+                        # 构建插入语句
+                        # 过滤空值
+                        filtered_student = {k: v for k, v in student.items() if v}
+                        fields = ', '.join(filtered_student.keys())
+                        placeholders = ', '.join(['%s'] * len(filtered_student))
+                        sql = f"INSERT INTO students ({fields}) VALUES ({placeholders})"
+                        cursor.execute(sql, list(filtered_student.values()))
+
+                db_interface.conn.commit()
+                success_count += 1
+            except Exception as e:
+                error_count += 1
+                errors.append({
+                    'student': student,
+                    'reason': str(e)
+                })
+
+        return jsonify({
+            'message': f'Import completed. {success_count} students successfully imported, {error_count} errors.',
+            'success_count': success_count,
+            'error_count': error_count,
+            'errors': errors if error_count > 0 else None
+        }), 200
+    except Exception as e:
+        logger.error(f"Error importing students: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == '__main__':
     socketio.run(app, host="0.0.0.0", debug=True, port=5000, allow_unsafe_werkzeug=True)

@@ -4,6 +4,7 @@ import HomeView from '../views/HomeView'
 import Function from '../views/Function.vue'
 import TrackVisualization from '../views/TrackVisualization'
 import CameraManagement from '../views/CameraManagement'
+import StudentManagement from '../views/StudentManagement.vue'
 
 Vue.use(VueRouter)
 
@@ -17,6 +18,11 @@ const routes = [
     path: '/Function',
     name: 'Function',
     component: Function
+  },
+  {
+    path: '/StudentManagement',
+    name: 'StudentManagement',
+    component: StudentManagement
   },
   {
     path: '/TrackVisualization',

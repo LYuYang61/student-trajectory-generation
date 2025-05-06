@@ -37,6 +37,7 @@ export default {
     return {
       pages: [
         {name: '功能介绍', index: '/Function'},
+        {name: '学生管理', index: '/StudentManagement'},
         {name: '监控管理', index: '/CameraManagement'},
         {name: '学生轨迹追踪', index: '/TrackVisualization'}
       ]

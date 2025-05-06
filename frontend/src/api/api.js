@@ -140,3 +140,67 @@ export const deleteVideo = (videoId) => {
     url: `/videos/${videoId}`
   })
 }
+
+// Add these functions to your existing api.js file
+
+// 获取学生列表（支持分页）
+export const getStudents = (params) => {
+  return request({
+    method: 'get',
+    url: '/students',
+    params: params
+  })
+}
+
+// 搜索学生
+export const searchStudents = (params) => {
+  return request({
+    method: 'get',
+    url: '/students/search',
+    params: params
+  })
+}
+
+// 添加单个学生
+export const addStudent = (data) => {
+  return request({
+    method: 'post',
+    url: '/students',
+    data: data
+  })
+}
+
+// 更新学生信息
+export const updateStudent = (data) => {
+  return request({
+    method: 'put',
+    url: `/students/${data.student_id}`,
+    data: data
+  })
+}
+
+// 删除单个学生
+export const deleteStudent = (studentId) => {
+  return request({
+    method: 'delete',
+    url: `/students/${studentId}`
+  })
+}
+
+// 批量删除学生
+export const batchDeleteStudents = (data) => {
+  return request({
+    method: 'post',
+    url: '/students/batch-delete',
+    data: data
+  })
+}
+
+// 从Excel导入学生
+export const importStudentsFromExcel = (data) => {
+  return request({
+    method: 'post',
+    url: '/students/import',
+    data: data
+  })
+}

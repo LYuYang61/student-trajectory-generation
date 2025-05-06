@@ -208,3 +208,8 @@ INSERT INTO student_trajectories (student_id, trajectory_data, timestamp) VALUES
 ('2021033', UNHEX(REPEAT('EEF', 200)), '2025-04-10 09:00:00'),
 ('2021034', UNHEX(REPEAT('FF0', 200)), '2025-04-10 09:00:00'),
 ('2021035', UNHEX(REPEAT('001', 200)), '2025-04-10 09:00:00');
+
+INSERT INTO students (student_id, name)
+SELECT DISTINCT student_id, '张三'
+FROM student_records
+WHERE student_id IS NOT NULL;
