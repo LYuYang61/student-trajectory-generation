@@ -1411,6 +1411,7 @@ def login():
             token_payload = {
                 'user_id': user['user_id'],
                 'username': user['username'],
+                'role': user['role'],
                 'exp': datetime.utcnow() + timedelta(hours=24)
             }
             token = jwt.encode(token_payload, app.config.get('SECRET_KEY', 'your-secret-key'), algorithm="HS256")
@@ -1574,6 +1575,316 @@ def change_password(current_user):
             'success': False,
             'message': f'修改密码失败: {str(e)}'
         }), 500
+
+
+# 获取所有用户（仅管理员可用）
+@app.route('/users', methods=['GET'])
+@token_required
+def get_users(current_user):
+    try:
+        # 检查是否是管理员
+        if current_user.get('role') != 'admin':
+            return jsonify({'message': '权限不足，只有管理员可以查看用户列表', 'success': False}), 403
+
+        page = int(request.args.get('page', 1))
+        page_size = int(request.args.get('pageSize', 10))
+        keyword = request.args.get('keyword', '')
+
+        # 计算偏移量
+        offset = (page - 1) * page_size
+
+        # 构建查询条件
+        search_condition = ""
+        params = []
+
+        if keyword:
+            search_term = f"%{keyword}%"
+            search_condition = "WHERE username LIKE %s OR real_name LIKE %s OR email LIKE %s"
+            params = [search_term, search_term, search_term]
+
+        # 获取总数
+        with db_interface.conn.cursor() as cursor:
+            count_sql = f"SELECT COUNT(*) FROM users {search_condition}"
+            cursor.execute(count_sql, params if params else None)
+            total = cursor.fetchone()[0]
+
+        # 分页查询用户列表，排除密码字段
+        with db_interface.conn.cursor() as cursor:
+            query_sql = f"""
+                SELECT user_id, username, role, real_name, email, phone, created_at, updated_at 
+                FROM users {search_condition}
+                ORDER BY created_at DESC
+                LIMIT %s OFFSET %s
+            """
+            execute_params = params + [page_size, offset] if params else [page_size, offset]
+            cursor.execute(query_sql, execute_params)
+
+            users = []
+            columns = [col[0] for col in cursor.description]
+            for row in cursor.fetchall():
+                user_dict = dict(zip(columns, row))
+                # 格式化日期时间
+                for date_field in ['created_at', 'updated_at']:
+                    if user_dict[date_field]:
+                        user_dict[date_field] = user_dict[date_field].strftime("%Y-%m-%d %H:%M:%S")
+                users.append(user_dict)
+
+        return jsonify({
+            'success': True,
+            'data': users,
+            'total': total,
+            'page': page,
+            'pageSize': page_size
+        })
+
+    except Exception as e:
+        logger.error(f"获取用户列表出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'message': f'获取用户列表出错: {str(e)}', 'success': False}), 500
+
+
+# 添加新用户（仅管理员可用）
+@app.route('/users', methods=['POST'])
+@token_required
+def add_user(current_user):
+    try:
+        # 检查是否是管理员
+        if current_user.get('role') != 'admin':
+            return jsonify({'message': '权限不足，只有管理员可以添加用户', 'success': False}), 403
+
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        role = data.get('role', 'user')  # 默认为普通用户
+        real_name = data.get('realName')
+        email = data.get('email')
+        phone = data.get('phone')
+
+        # 必填字段验证
+        if not username or not password:
+            return jsonify({'message': '用户名和密码不能为空', 'success': False}), 400
+
+        # 检查角色是否有效
+        if role not in ['admin', 'user']:
+            return jsonify({'message': '无效的角色类型', 'success': False}), 400
+
+        # 确保数据库连接有效
+        if db_interface.conn.open is False:
+            db_interface.reconnect()
+
+        cursor = db_interface.conn.cursor()
+
+        # 检查用户名是否已存在
+        cursor.execute("SELECT username FROM users WHERE username = %s", (username,))
+        if cursor.fetchone():
+            return jsonify({'message': '用户名已存在', 'success': False}), 400
+
+        # 加密密码
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+        # 插入新用户
+        cursor.execute(
+            "INSERT INTO users (username, password_hash, role, real_name, email, phone) VALUES (%s, %s, %s, %s, %s, %s)",
+            (username, hashed_password, role, real_name, email, phone)
+        )
+        db_interface.conn.commit()
+
+        # 获取新创建的用户ID
+        user_id = cursor.lastrowid
+
+        return jsonify({
+            'message': '用户创建成功',
+            'success': True,
+            'userId': user_id
+        }), 201
+
+    except Exception as e:
+        logger.error(f"添加用户出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'message': f'添加用户出错: {str(e)}', 'success': False}), 500
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+
+
+# 更新用户信息（仅管理员可用）
+@app.route('/users/<int:user_id>', methods=['PUT'])
+@token_required
+def update_user(current_user, user_id):
+    try:
+        # 检查是否是管理员
+        if current_user.get('role') != 'admin':
+            return jsonify({'message': '权限不足，只有管理员可以更新用户信息', 'success': False}), 403
+
+        data = request.get_json()
+        username = data.get('username')
+        role = data.get('role')
+        real_name = data.get('realName')
+        email = data.get('email')
+        phone = data.get('phone')
+        password = data.get('password')  # 如果需要更新密码
+
+        # 至少需要一个字段来更新
+        if not any([username, role, real_name, email, phone, password]):
+            return jsonify({'message': '没有提供要更新的字段', 'success': False}), 400
+
+        # 确保数据库连接有效
+        if db_interface.conn.open is False:
+            db_interface.reconnect()
+
+        cursor = db_interface.conn.cursor()
+
+        # 检查用户是否存在
+        cursor.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
+        if not cursor.fetchone():
+            return jsonify({'message': '用户不存在', 'success': False}), 404
+
+        # 如果要更新用户名，检查是否与其他用户冲突
+        if username:
+            cursor.execute("SELECT user_id FROM users WHERE username = %s AND user_id != %s", (username, user_id))
+            if cursor.fetchone():
+                return jsonify({'message': '用户名已被使用', 'success': False}), 400
+
+        # 构建更新语句
+        update_fields = []
+        params = []
+
+        if username:
+            update_fields.append("username = %s")
+            params.append(username)
+
+        if role:
+            if role not in ['admin', 'user']:
+                return jsonify({'message': '无效的角色类型', 'success': False}), 400
+            update_fields.append("role = %s")
+            params.append(role)
+
+        if real_name:
+            update_fields.append("real_name = %s")
+            params.append(real_name)
+
+        if email:
+            update_fields.append("email = %s")
+            params.append(email)
+
+        if phone:
+            update_fields.append("phone = %s")
+            params.append(phone)
+
+        if password:
+            hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            update_fields.append("password_hash = %s")
+            params.append(hashed_password)
+
+        if update_fields:
+            params.append(user_id)  # WHERE条件参数
+            update_sql = f"UPDATE users SET {', '.join(update_fields)} WHERE user_id = %s"
+            cursor.execute(update_sql, params)
+            db_interface.conn.commit()
+
+        return jsonify({
+            'message': '用户信息更新成功',
+            'success': True
+        })
+
+    except Exception as e:
+        logger.error(f"更新用户信息出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'message': f'更新用户信息出错: {str(e)}', 'success': False}), 500
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+
+
+# 删除用户（仅管理员可用）
+@app.route('/users/<int:user_id>', methods=['DELETE'])
+@token_required
+def delete_user(current_user, user_id):
+    try:
+        # 检查是否是管理员
+        if current_user.get('role') != 'admin':
+            return jsonify({'message': '权限不足，只有管理员可以删除用户', 'success': False}), 403
+
+        # 确保数据库连接有效
+        if db_interface.conn.open is False:
+            db_interface.reconnect()
+
+        cursor = db_interface.conn.cursor()
+
+        # 检查用户是否存在
+        cursor.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
+        if not cursor.fetchone():
+            return jsonify({'message': '用户不存在', 'success': False}), 404
+
+        # 防止管理员删除自己
+        if int(current_user.get('user_id')) == user_id:
+            return jsonify({'message': '不能删除自己的账户', 'success': False}), 400
+
+        # 删除用户
+        cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
+        db_interface.conn.commit()
+
+        return jsonify({
+            'message': '用户删除成功',
+            'success': True
+        })
+
+    except Exception as e:
+        logger.error(f"删除用户出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'message': f'删除用户出错: {str(e)}', 'success': False}), 500
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
+
+
+# 批量删除用户（仅管理员可用）
+@app.route('/users/batch-delete', methods=['POST'])
+@token_required
+def batch_delete_users(current_user):
+    try:
+        # 检查是否是管理员
+        if current_user.get('role') != 'admin':
+            return jsonify({'message': '权限不足，只有管理员可以批量删除用户', 'success': False}), 403
+
+        data = request.get_json()
+        user_ids = data.get('ids', [])
+
+        if not user_ids:
+            return jsonify({'message': '未提供要删除的用户ID', 'success': False}), 400
+
+        # 确保数据库连接有效
+        if db_interface.conn.open is False:
+            db_interface.reconnect()
+
+        cursor = db_interface.conn.cursor()
+
+        # 防止管理员删除自己
+        current_user_id = int(current_user.get('user_id'))
+        if current_user_id in user_ids:
+            return jsonify({'message': '不能删除自己的账户', 'success': False}), 400
+
+        # 构建SQL删除语句
+        placeholders = ', '.join(['%s'] * len(user_ids))
+        delete_sql = f"DELETE FROM users WHERE user_id IN ({placeholders})"
+
+        cursor.execute(delete_sql, user_ids)
+        db_interface.conn.commit()
+        deleted_count = cursor.rowcount
+
+        return jsonify({
+            'message': f'成功删除 {deleted_count} 个用户',
+            'success': True,
+            'count': deleted_count
+        })
+
+    except Exception as e:
+        logger.error(f"批量删除用户出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'message': f'批量删除用户出错: {str(e)}', 'success': False}), 500
+    finally:
+        if 'cursor' in locals():
+            cursor.close()
 
 if __name__ == '__main__':
     socketio.run(app, host="0.0.0.0", debug=True, port=5000, allow_unsafe_werkzeug=True)

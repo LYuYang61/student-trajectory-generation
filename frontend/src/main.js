@@ -11,9 +11,16 @@ import {VUE_SOCKET_IO} from './util/socket'
 
 import './static/css/common.css'
 
-// import videoPlay from 'vue3-video-play' // 引入组件
-// import 'vue3-video-play/dist/style.css' // 引入css
-// app.use(videoPlay)
+import axios from 'axios'
+
+axios.interceptors.request.use(config => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
 Vue.use(ElementUI)
 Vue.use(VUE_SOCKET_IO)
 

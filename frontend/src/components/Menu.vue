@@ -13,9 +13,11 @@
       mode="horizontal"
       router>
       <img class="logo" src="../assets/hfut.png" alt=""/>
-      <el-menu-item v-for="page in pages"
-                    :key="page.index"
-                    :index="page.index">
+      <el-menu-item
+        v-for="page in pages"
+        :key="page.index"
+        :index="page.index"
+        v-if="!page.requiresAdmin || (page.requiresAdmin && isAdmin)">
         {{ page.name }}
       </el-menu-item>
 
@@ -48,11 +50,13 @@ export default {
     return {
       isLoggedIn: false,
       username: '',
+      isAdmin: false, // 添加管理员标识
       pages: [
         {name: '功能介绍', index: '/Function'},
         {name: '学生管理', index: '/StudentManagement'},
         {name: '监控管理', index: '/CameraManagement'},
-        {name: '学生轨迹追踪', index: '/TrackVisualization'}
+        {name: '学生轨迹追踪', index: '/TrackVisualization'},
+        {name: '用户管理', index: '/UserManagement', requiresAdmin: true} // 添加用户管理菜单，仅管理员可见
       ]
     }
   },
@@ -61,9 +65,6 @@ export default {
     this.checkLoginStatus()
   },
   methods: {
-    goHome () {
-      this.$router.push('/')
-    },
     checkLoginStatus () {
       const token = localStorage.getItem('token')
       const user = JSON.parse(localStorage.getItem('user') || '{}')
@@ -71,9 +72,11 @@ export default {
       if (token && user.username) {
         this.isLoggedIn = true
         this.username = user.username
+        this.isAdmin = user.role === 'admin' // 设置管理员标识
       } else {
         this.isLoggedIn = false
         this.username = ''
+        this.isAdmin = false
       }
     },
     handleCommand (command) {
