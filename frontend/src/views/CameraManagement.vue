@@ -11,7 +11,8 @@
               <el-button
                 style="float: right; padding: 3px 0"
                 type="text"
-                @click="showAddCameraDialog">
+                @click="showAddCameraDialog"
+                v-if="isAdmin">
                 <i class="el-icon-plus"></i> 添加监控
               </el-button>
             </div>
@@ -43,20 +44,23 @@
                   label="操作"
                   width="150">
                   <template slot-scope="scope">
-                    <el-button
-                      size="mini"
-                      type="primary"
-                      icon="el-icon-edit"
-                      circle
-                      @click.stop="handleEdit(scope.row)">
-                    </el-button>
-                    <el-button
-                      size="mini"
-                      type="danger"
-                      icon="el-icon-delete"
-                      circle
-                      @click.stop="handleDelete(scope.row)">
-                    </el-button>
+                    <template v-if="isAdmin">
+                      <el-button
+                        size="mini"
+                        type="primary"
+                        icon="el-icon-edit"
+                        circle
+                        @click.stop="handleEdit(scope.row)">
+                      </el-button>
+                      <el-button
+                        size="mini"
+                        type="danger"
+                        icon="el-icon-delete"
+                        circle
+                        @click.stop="handleDelete(scope.row)">
+                      </el-button>
+                    </template>
+                    <span v-else class="no-permission">仅可查看</span>
                   </template>
                 </el-table-column>
               </el-table>
@@ -356,6 +360,7 @@ export default {
   data () {
     return {
       // 其他状态...
+      isAdmin: false,
       isTrackingMinimized: false,
       trackingVideoPath: null, // 存储本地跟踪视频路径
       // 摄像头列表和搜索
@@ -438,6 +443,7 @@ export default {
     this.loadCameras()
     // 添加百度地图API
     this.loadBaiduMapApi()
+    this.checkUserRole()
   },
   beforeDestroy () {
     // 确保在组件销毁前停止所有视频流和跟踪任务
@@ -445,6 +451,20 @@ export default {
     this.stopTracking()
   },
   methods: {
+    checkUserRole () {
+      const token = localStorage.getItem('token')
+      if (!token) return
+
+      try {
+        const tokenParts = token.split('.')
+        if (tokenParts.length !== 3) return
+
+        const payload = JSON.parse(atob(tokenParts[1]))
+        this.isAdmin = payload.role === 'admin'
+      } catch (e) {
+        console.error('解析token失败', e)
+      }
+    },
     // 打开包含视频的文件夹
     handleOpenFolder () {
       // 优先使用跟踪后的视频路径，如果没有则使用原始视频路径

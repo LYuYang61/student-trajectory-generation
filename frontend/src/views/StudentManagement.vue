@@ -3,15 +3,16 @@
     <Menu></Menu>
     <div class="content">
       <div class="operation-bar">
-        <el-button type="primary" size="small" @click="openAddDialog">添加学生</el-button>
-        <el-button type="danger" size="small" @click="batchDelete" :disabled="selectedStudents.length === 0">批量删除</el-button>
+        <el-button type="primary" size="small" @click="openAddDialog" v-if="isAdmin">添加学生</el-button>
+        <el-button type="danger" size="small" @click="batchDelete" :disabled="selectedStudents.length === 0" v-if="isAdmin">批量删除</el-button>
         <el-upload
           class="excel-upload"
           action="#"
           :show-file-list="false"
           :on-change="handleExcelUpload"
           :auto-upload="false"
-          accept=".xlsx,.xls">
+          accept=".xlsx,.xls"
+          v-if="isAdmin">
           <el-button type="success" size="small">导入Excel</el-button>
         </el-upload>
         <el-input
@@ -87,13 +88,16 @@
           fixed="right"
           width="150">
           <template slot-scope="scope">
-            <el-button
-              size="mini"
-              @click="handleEdit(scope.row)">编辑</el-button>
-            <el-button
-              size="mini"
-              type="danger"
-              @click="handleDelete(scope.row)">删除</el-button>
+            <template v-if="isAdmin">
+              <el-button
+                size="mini"
+                @click="handleEdit(scope.row)">编辑</el-button>
+              <el-button
+                size="mini"
+                type="danger"
+                @click="handleDelete(scope.row)">删除</el-button>
+            </template>
+            <span v-else>仅可查看</span>
           </template>
         </el-table-column>
       </el-table>
@@ -207,6 +211,7 @@ export default {
   components: { Menu },
   data () {
     return {
+      isAdmin: false,
       pageSizes: [10, 20, 30, 40],
       students: [],
       selectedStudents: [],
@@ -252,8 +257,23 @@ export default {
   },
   created () {
     this.fetchStudents()
+    this.checkUserRole()
   },
   methods: {
+    checkUserRole () {
+      const token = localStorage.getItem('token')
+      if (!token) return
+
+      try {
+        const tokenParts = token.split('.')
+        if (tokenParts.length !== 3) return
+
+        const payload = JSON.parse(atob(tokenParts[1]))
+        this.isAdmin = payload.role === 'admin'
+      } catch (e) {
+        console.error('解析token失败', e)
+      }
+    },
     formatDate (row, column, cellValue) {
       if (!cellValue) return ''
 
