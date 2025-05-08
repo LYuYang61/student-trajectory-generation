@@ -32,11 +32,27 @@ class ReIDProcessor:
         """
         logger.info("初始化 ReIDProcessor")
         self.models = {}
-        self.transform = transforms.Compose([
-            transforms.Resize((384, 128)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        # 为不同模型创建不同的transform
+        self.transforms = {
+            'mgn': transforms.Compose([
+                transforms.Resize((384, 128)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ]),
+            'agw': transforms.Compose([
+                transforms.Resize((256, 128)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ]),
+            'sbs': transforms.Compose([
+                transforms.Resize((256, 128)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+        }
+
+        # 兼容原有代码的默认transform
+        self.transform = self.transforms['mgn']
         self.db_interface = db_interface
         logger.info("ReIDProcessor 初始化完成，图像转换器已设置")
 
@@ -49,22 +65,106 @@ class ReIDProcessor:
             return self.models[algorithm]
 
         try:
-            if algorithm == 'osnet':
-                logger.info("开始加载 OSNet 模型")
-                # 实现OSNet模型加载
-                from torchreid.reid.models.osnet import osnet_x1_0
-                model = osnet_x1_0(name='osnet', num_classes=751)
-                model_path = os.path.join(os.path.dirname(__file__), '../resources/models/osnet_x1_0.pth')
-                logger.info(f"OSNet 模型路径: {model_path}")
+            if algorithm == 'agw':
+                logger.info("开始加载 FastReID AGW 模型")
+                from fastreid.config import get_cfg
+                from fastreid.modeling.meta_arch import build_model
+                from fastreid.utils.checkpoint import Checkpointer
+                import torch
 
-                logger.info("正在加载 OSNet 模型权重")
-                model.load_state_dict(torch.load(model_path, map_location='cpu'))
+                # 创建默认配置
+                cfg = get_cfg()
+
+                # 重要：设置为CPU设备
+                cfg.MODEL.DEVICE = "cpu"
+
+                # 加载配置文件
+                config_path = os.path.join(os.path.dirname(__file__), '../resources/configs/agw.yml')
+                logger.info(f"AGW 配置文件路径: {config_path}")
+
+                if os.path.exists(config_path):
+                    cfg.merge_from_file(config_path)
+                    logger.info("成功加载AGW配置文件")
+                else:
+                    logger.warning(f"配置文件不存在，使用默认设置: {config_path}")
+                    # 手动设置关键配置
+                    cfg.MODEL.META_ARCHITECTURE = "Baseline"
+                    cfg.MODEL.BACKBONE.NAME = "build_resnet_backbone"
+                    cfg.MODEL.BACKBONE.DEPTH = "50x"
+                    cfg.MODEL.HEADS.NAME = "EmbeddingHead"
+                    cfg.MODEL.HEADS.EMBEDDING_DIM = 512
+                    cfg.MODEL.HEADS.NECK_FEAT = "after"
+                    cfg.MODEL.HEADS.POOL_LAYER = "GeneralizedMeanPooling"
+                    cfg.MODEL.DEVICE = "cpu"
+
+                # 创建模型
+                model = build_model(cfg)
+                model_path = os.path.join(os.path.dirname(__file__), '../resources/models/agw_model.pth')
+                logger.info(f"AGW 模型路径: {model_path}")
+
+                # 加载权重
+                if os.path.exists(model_path):
+                    Checkpointer(model).load(model_path)
+                    logger.info("AGW模型权重加载成功")
+                else:
+                    logger.warning(f"AGW模型权重文件不存在: {model_path}")
+
                 model.eval()
                 self.models[algorithm] = model
-                logger.info("OSNet 模型加载成功并设置为评估模式")
+                logger.info("AGW 模型加载成功并设置为评估模式")
+                return model
+
+            elif algorithm == 'sbs':
+                logger.info("开始加载 FastReID SBS 模型")
+                from fastreid.config import get_cfg
+                from fastreid.modeling.meta_arch import build_model
+                from fastreid.utils.checkpoint import Checkpointer
+                import torch
+
+                # 创建默认配置
+                cfg = get_cfg()
+
+                # 设置为CPU设备
+                cfg.MODEL.DEVICE = "cpu"
+
+                # 加载配置文件
+                config_path = os.path.join(os.path.dirname(__file__), '../resources/configs/sbs.yml')
+                logger.info(f"SBS 配置文件路径: {config_path}")
+
+                if os.path.exists(config_path):
+                    cfg.merge_from_file(config_path)
+                    logger.info("成功加载SBS配置文件")
+                else:
+                    logger.warning(f"配置文件不存在，使用默认设置: {config_path}")
+                    # 手动设置关键配置
+                    cfg.MODEL.META_ARCHITECTURE = "Baseline"
+                    cfg.MODEL.BACKBONE.NAME = "build_resnet_backbone"
+                    cfg.MODEL.BACKBONE.DEPTH = "50x"
+                    cfg.MODEL.HEADS.NAME = "EmbeddingHead"
+                    cfg.MODEL.HEADS.EMBEDDING_DIM = 512
+                    cfg.MODEL.HEADS.NECK_FEAT = "after"
+                    cfg.MODEL.HEADS.POOL_LAYER = "GeneralizedMeanPoolingP"
+                    cfg.MODEL.DEVICE = "cpu"
+
+                # 创建模型
+                model = build_model(cfg)
+                model_path = os.path.join(os.path.dirname(__file__), '../resources/models/sbs_model.pth')
+                logger.info(f"SBS 模型路径: {model_path}")
+
+                # 加载权重
+                if os.path.exists(model_path):
+                    Checkpointer(model).load(model_path)
+                    logger.info("SBS模型权重加载成功")
+                else:
+                    logger.warning(f"SBS模型权重文件不存在: {model_path}")
+
+                model.eval()
+                self.models[algorithm] = model
+                logger.info("SBS 模型加载成功并设置为评估模式")
                 return model
 
             elif algorithm == 'mgn':
+                # MGN模型加载代码保持不变
                 logger.info("开始加载 MGN 模型")
                 # 添加项目根目录到搜索路径
                 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -72,6 +172,7 @@ class ReIDProcessor:
 
                 # 直接导入MGN类
                 from backend.resources.models.mgn.mgn import MGN
+                import torch
 
                 # 初始化模型参数
                 class Args:
@@ -86,7 +187,7 @@ class ReIDProcessor:
 
                 # 加载权重
                 model_path = os.path.join(os.path.dirname(__file__),
-                                          '../resources/models/mgn/model_best.pt')
+                                          '../resources/models/mgn/model/model_best.pt')
                 logger.info(f"MGN模型路径: {model_path}")
 
                 if os.path.exists(model_path):
@@ -100,39 +201,20 @@ class ReIDProcessor:
                 logger.info("MGN模型加载成功并设置为评估模式")
                 return model
 
-            elif algorithm == 'transformer':
-                logger.info("开始加载 TransReID 模型")
-                # 实现TransReID模型加载
-                from backend.resources.models.transreid import build_transformer_model
-                logger.info("正在构建 TransReID 模型结构")
-                model = build_transformer_model()
-                model_path = os.path.join(os.path.dirname(__file__), '../resources/models/transreid.pth')
-                logger.info(f"TransReID 模型路径: {model_path}")
-
-                logger.info("正在加载 TransReID 模型权重")
-                model.load_state_dict(torch.load(model_path, map_location='cpu'))
-                model.eval()
-                self.models[algorithm] = model
-                logger.info("TransReID 模型加载成功并设置为评估模式")
-                return model
-
             else:
                 logger.error(f"不支持的算法: {algorithm}")
                 raise ValueError(f"不支持的算法: {algorithm}")
 
         except Exception as e:
             logger.error(f"加载 {algorithm} 模型失败: {str(e)}", exc_info=True)
+            # 出错时返回一个默认模型，防止整个程序崩溃
+            if algorithm != 'mgn':  # 仅对新增模型生效
+                logger.info(f"加载失败，改为加载MGN模型")
+                return self._load_model('mgn')
             raise
 
     def _extract_feature_vector(self, image_data, algorithm='mgn'):
         """从图像中提取特征向量"""
-        # 在 _extract_feature_vector 方法中添加更详细的日志
-        #logger.info(f"输入图像形状: {image_data.shape}")
-        # 保存调试图像到临时文件
-        #debug_path = f"debug_image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-        #cv2.imwrite(debug_path, image_data)
-        #logger.info(f"保存调试图像到: {debug_path}")
-
         logger.info(f"开始使用 {algorithm} 算法提取特征向量")
         try:
             # 加载模型
@@ -145,15 +227,18 @@ class ReIDProcessor:
                 logger.error("不支持的图像数据格式")
                 return None
 
+            # 使用对应模型的transform
+            if algorithm in self.transforms:
+                transform = self.transforms[algorithm]
+            else:
+                transform = self.transform  # 使用默认transform
+
             # 转换图像
-            image_tensor = self.transform(image).unsqueeze(0)
+            image_tensor = transform(image).unsqueeze(0)
 
             # 提取特征
             with torch.no_grad():
-                if algorithm == 'osnet':
-                    features = model(image_tensor)
-                    feature_vector = features.cpu().numpy()[0]
-                elif algorithm == 'mgn':
+                if algorithm == 'mgn':
                     features, *_ = model(image_tensor)
                     feature_vector = features.cpu().numpy()[0]
                     # 确保特征向量维度是2048
@@ -167,9 +252,15 @@ class ReIDProcessor:
                         else:
                             # 截断
                             feature_vector = feature_vector[:2048]
+                elif algorithm in ['agw', 'sbs']:
+                    # FastReID模型特征提取
+                    features = model(image_tensor)
+                    # SBS和AGW模型的特征提取方式
+                    feature_vector = features.cpu().numpy()[0]
+                    logger.info(f"FastReID {algorithm} 特征形状: {feature_vector.shape}")
                 else:
-                    # 其他模型处理...
-                    pass
+                    logger.error(f"不支持的算法: {algorithm}")
+                    return None
 
             logger.info(f"特征提取完成，维度: {len(feature_vector)}")
             return feature_vector

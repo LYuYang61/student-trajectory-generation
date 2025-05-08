@@ -635,36 +635,6 @@ def feature_matching():
         return jsonify({'status': 'error', 'message': f'特征匹配错误: {str(e)}'})
 
 
-# 保留原有端点以保持向后兼容性
-@app.route('/reid', methods=['POST'])
-def reid():
-    try:
-        data = request.get_json()
-        if not data or 'records' not in data:
-            return jsonify({'status': 'error', 'message': '缺少记录数据'})
-
-        records = data['records']
-        algorithm = data.get('algorithm', 'mgn')
-        threshold = data.get('threshold', 0.7)
-
-        def progress_callback(stage, percentage):
-            socketio.emit('reid_progress', {'stage': stage, 'percentage': percentage})
-
-        # 执行重识别
-        reid_processor = ReIDProcessor()
-        features_records = reid_processor.extract_features(records, algorithm, progress_callback)
-        matched_records = reid_processor.match_features(features_records, threshold, progress_callback)
-
-        return jsonify({
-            'status': 'success',
-            'matched_records': matched_records
-        })
-
-    except Exception as e:
-        logging.error(f"重识别错误: {str(e)}")
-        return jsonify({'status': 'error', 'message': f'重识别错误: {str(e)}'})
-
-
 @app.route('/cameras', methods=['GET'])
 def get_all_cameras():
     """获取所有摄像头信息"""

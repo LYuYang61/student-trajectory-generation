@@ -38,16 +38,18 @@
               </el-checkbox-group>
             </el-form-item>
             <el-form-item label="参考图片">
-              <el-upload
-                class="upload-demo"
-                action="#"
-                :http-request="handleImageUpload"
-                :show-file-list="false"
-                :before-upload="beforeImageUpload">
-                <img v-if="filterForm.referenceImage" :src="filterForm.referenceImage" class="reference-image">
-                <el-button v-else type="primary">点击上传参考图片</el-button>
-                <div slot="tip" class="el-upload__tip">请上传清晰的正面照片，用于辅助识别</div>
-              </el-upload>
+              <div class="image-upload-area">
+                <el-upload
+                  class="upload-demo"
+                  action="#"
+                  :http-request="handleImageUpload"
+                  :show-file-list="false"
+                  :before-upload="beforeImageUpload">
+                  <img v-if="filterForm.referenceImage" :src="filterForm.referenceImage" class="reference-image">
+                  <el-button v-else type="primary">点击上传参考图片</el-button>
+                </el-upload>
+                <div class="el-upload__tip">请上传清晰的正面照片，用于辅助识别</div>
+              </div>
             </el-form-item>
             <el-form-item>
               <el-button type="primary" @click="startFiltering">开始过滤</el-button>
@@ -112,9 +114,9 @@
             <el-form :model="reIdOptions" label-width="120px">
               <el-form-item label="重识别算法">
                 <el-select v-model="reIdOptions.algorithm">
-                  <el-option label="OSNetReID" value="osnet"></el-option>
+                  <el-option label="AGWReID" value="agw"></el-option>
                   <el-option label="MGNReID" value="mgn"></el-option>
-                  <el-option label="TransReID" value="transformer"></el-option>
+                  <el-option label="SBSReID" value="sbs"></el-option>
                 </el-select>
               </el-form-item>
               <el-form-item label="匹配阈值">
@@ -1113,10 +1115,18 @@ export default {
 }
 
 .reference-image {
-  width: 150px;
-  height: 150px;
+  width: 120px;
+  height: 280px;
   object-fit: cover;
   border-radius: 4px;
+  margin: 10px 0;
+}
+
+.image-upload-area {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 10px 0;
 }
 
 .filter-results {

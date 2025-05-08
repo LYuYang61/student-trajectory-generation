@@ -1,0 +1,27 @@
+MODEL:
+  META_ARCHITECTURE: 'Baseline'
+  BACKBONE:
+    NAME: 'build_resnet_backbone'
+    DEPTH: '50x'
+    LAST_STRIDE: 1
+    WITH_IBN: False
+    PRETRAIN: True
+  HEADS:
+    NAME: 'EmbeddingHead'
+    NORM: 'BN'
+    NECK_FEAT: 'after'
+    EMBEDDING_DIM: 512
+    POOL_LAYER: 'GeneralizedMeanPoolingP'
+    CLS_LAYER: 'Linear'
+    SCALE: 64
+    MARGIN: 0.35
+  LOSSES:
+    NAME: ('CrossEntropyLoss', 'TripletLoss')
+    CE:
+      EPSILON: 0.1
+      SCALE: 1.0
+    TRI:
+      MARGIN: 0.3
+      HARD_MINING: True
+      SCALE: 1.0
+  DEVICE: "cpu"
