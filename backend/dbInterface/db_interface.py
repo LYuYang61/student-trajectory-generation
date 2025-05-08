@@ -348,3 +348,41 @@ class DatabaseInterface:
             logger.error(f"Failed to reconnect to database: {e}")
             raise
 
+    def execute_update(self, query: str, params=None) -> int:
+        """
+        执行SQL更新操作并返回影响的行数
+
+        Args:
+            query: SQL更新语句
+            params: 查询参数
+
+        Returns:
+            受影响的行数
+        """
+        try:
+            cursor = self.conn.cursor()
+
+            # 检查数据库类型，调整SQL语法
+            if self.db_config['type'].lower() == 'sqlite':
+                query = query.replace("%s", "?")
+
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+
+            # 获取受影响的行数
+            affected_rows = cursor.rowcount
+
+            # 提交更改
+            self.conn.commit()
+            cursor.close()
+
+            logger.info(f"更新操作成功，影响了 {affected_rows} 行数据")
+            return affected_rows
+
+        except Exception as e:
+            logger.error(f"执行更新操作时发生错误: {e}")
+            self.conn.rollback()  # 出错时回滚事务
+            raise
+

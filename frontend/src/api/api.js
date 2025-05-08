@@ -24,11 +24,11 @@ export function stopTrackingRequest () {
 }
 
 // 打开包含视频文件的文件夹
-export function openFolder (path) {
+export function openFolder (path, cameraId, videoTimeId) {
   return request({
     url: '/openFolder',
     method: 'post',
-    data: { path },
+    data: { path, cameraId, videoTimeId },
     headers: {
       'Content-Type': 'application/json'
     }
@@ -36,11 +36,11 @@ export function openFolder (path) {
 }
 
 // 在本地播放器中播放视频
-export function playInLocalPlayer (path) {
+export function playInLocalPlayer (path, cameraId, videoTimeId) {
   return request({
     url: '/playInLocalPlayer',
     method: 'post',
-    data: { path },
+    data: { path, cameraId, videoTimeId },
     headers: {
       'Content-Type': 'application/json'
     }

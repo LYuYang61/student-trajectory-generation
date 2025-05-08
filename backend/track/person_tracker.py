@@ -186,9 +186,17 @@ class PersonTracker:
 
             # 显示结果
             if show:
-                cv2.imshow("Tracking", frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
+                try:
+                    cv2.imshow("Tracking", frame)
+                    cv2.waitKey(1)
+                except cv2.error:
+                    # 如果 imshow 失败，可以保存帧到临时文件
+                    if not hasattr(self, 'frame_count'):
+                        self.frame_count = 0
+                    # 每隔几帧保存一次，避免保存太多图片
+                    if self.frame_count % 5 == 0:
+                        cv2.imwrite(f"temp_frame_{self.frame_count}.jpg", frame)
+                    self.frame_count += 1
 
             frame_idx += 1
 

@@ -217,16 +217,16 @@
                 type="primary"
                 icon="el-icon-folder-opened"
                 @click="handleOpenFolder"
-                :disabled="!selectedCamera || !selectedCamera.camera_id || selectedCamera.camera_id > 1000 || (!trackingVideoPath && !videoUrl)">
-                打开文件夹
+                :disabled="!selectedCamera || !selectedCamera.camera_id || selectedCamera.camera_id > 1000 || !selectedTimeRange">
+                目标跟踪结果文件夹
               </el-button>
               <el-button
                 size="small"
                 type="success"
                 icon="el-icon-video-play"
                 @click="handlePlayInLocalPlayer"
-                :disabled="!selectedCamera || !selectedCamera.camera_id || selectedCamera.camera_id > 1000 || (!trackingVideoPath && !videoUrl)">
-                本地播放
+                :disabled="!selectedCamera || !selectedCamera.camera_id || selectedCamera.camera_id > 1000 || !selectedTimeRange">
+                播放目标跟踪结果
               </el-button>
             </div>
           </div>
@@ -465,8 +465,15 @@ export default {
         console.error('解析token失败', e)
       }
     },
+
     // 打开包含视频的文件夹
     handleOpenFolder () {
+      // 获取当前选中的视频时间范围ID
+      if (!this.selectedTimeRange) {
+        this.$message.warning('请先选择一个视频时间段')
+        return
+      }
+
       // 优先使用跟踪后的视频路径，如果没有则使用原始视频路径
       const path = this.trackingVideoPath || this.videoUrl
 
@@ -475,25 +482,18 @@ export default {
         return
       }
 
-      // 检查当前选中的摄像头是否有权限
+      // 检查当前选中的摄像头是否有效
       if (!this.selectedCamera || !this.selectedCamera.camera_id) {
         this.$message.warning('未选择有效的摄像头')
         return
       }
 
-      // 判断是否为本地摄像头（这里可以根据实际情况进行判断）
-      // 例如：摄像头ID小于1000的为本地摄像头，可以打开文件夹
-      if (this.selectedCamera.camera_id > 1000) { // 根据实际情况调整判断逻辑
-        this.$message.warning('此摄像头视频不支持本地文件操作')
-        return
-      }
-
-      openFolder(path)
+      openFolder(path, this.selectedCamera.camera_id, this.selectedTimeRange)
         .then(response => {
           if (response.data.status === 'success') {
             this.$message.success('文件夹已打开')
           } else {
-            this.$message.error(`打开文件夹失败: ${response.data.message}`)
+            this.$message.error(`${response.data.message}`)
           }
         })
         .catch(error => {
@@ -504,6 +504,12 @@ export default {
 
     // 在本地播放器中播放视频
     handlePlayInLocalPlayer () {
+      // 获取当前选中的视频时间范围ID
+      if (!this.selectedTimeRange) {
+        this.$message.warning('请先选择一个视频时间段')
+        return
+      }
+
       // 优先使用跟踪后的视频路径，如果没有则使用原始视频路径
       const path = this.trackingVideoPath || this.videoUrl
 
@@ -512,25 +518,18 @@ export default {
         return
       }
 
-      // 检查当前选中的摄像头是否有权限
+      // 检查当前选中的摄像头是否有效
       if (!this.selectedCamera || !this.selectedCamera.camera_id) {
         this.$message.warning('未选择有效的摄像头')
         return
       }
 
-      // 判断是否为本地摄像头（这里可以根据实际情况进行判断）
-      // 例如：摄像头ID小于1000的为本地摄像头，可以本地播放
-      if (this.selectedCamera.camera_id > 1000) { // 根据实际情况调整判断逻辑
-        this.$message.warning('此摄像头视频不支持本地播放')
-        return
-      }
-
-      playInLocalPlayer(path)
+      playInLocalPlayer(path, this.selectedCamera.camera_id, this.selectedTimeRange)
         .then(response => {
           if (response.data.status === 'success') {
             this.$message.success('视频已在本地播放器中打开')
           } else {
-            this.$message.error(`播放视频失败: ${response.data.message}`)
+            this.$message.error(`${response.data.message}`)
           }
         })
         .catch(error => {

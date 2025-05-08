@@ -206,21 +206,48 @@ def track_by_video():
 
             # 重命名结果文件以匹配原始视频名称
             if tracked_video_path and os.path.exists(tracked_video_path):
-                # 如果路径不是已经设置的result_path，则重命名
-                if tracked_video_path != result_path:
-                    os.rename(tracked_video_path, result_path)
-                    tracked_video_path = result_path
+                # 更新数据库中的跟踪视频路径
+                try:
 
-                # 返回本地文件路径而非OSS URL
-                logger.info(f"视频处理完成，保存在: {tracked_video_path}")
+                    if tracked_video_path and os.path.exists(tracked_video_path):
+                        # 如果路径不是已经设置的result_path，则重命名
+                        if tracked_video_path != result_path:
+                            os.rename(tracked_video_path, result_path)
+                            tracked_video_path = result_path
+
+                        # 返回本地文件路径而非OSS URL
+                        logger.info(f"视频处理完成，保存在: {tracked_video_path}")
+
+                    # 提取源视频路径对应的记录ID
+                    result = db_interface.execute_query(
+                        "SELECT id, camera_id, date FROM camera_videos WHERE video_path = %s",
+                        (video_url,)
+                    )
+
+                    if result and len(result) > 0:
+                        # 找到匹配的记录，更新tracking_video_path
+                        video_record_id = result[0]['id']
+                        db_interface.execute_update(
+                            "UPDATE camera_videos SET tracking_video_path = %s WHERE id = %s",
+                            (tracked_video_path, video_record_id)
+                        )
+                        logger.info(f"已更新视频ID {video_record_id} 的跟踪路径: {tracked_video_path}")
+                    else:
+                        logger.warning(f"未找到与视频路径 {video_url} 匹配的记录")
+
+                except Exception as db_err:
+                    logger.error(f"更新数据库跟踪视频路径时出错: {str(db_err)}")
+
                 return jsonify({
                     'status': 'success',
-                    'message': '视频处理完成',
-                    'tracking_video_path': tracked_video_path,  # 返回本地文件路径
+                    'message': '视频处理成功',
+                    'tracking_video_path': tracked_video_path
                 })
             else:
-                logger.error("处理完成但结果文件不存在")
-                return jsonify({'status': 'error', 'message': '视频处理失败，结果文件不存在'})
+                return jsonify({
+                    'status': 'error',
+                    'message': '视频处理完成，但结果文件不存在'
+                })
 
         except Exception as proc_err:
             logger.error(f"视频处理过程中出错: {str(proc_err)}\n{traceback.format_exc()}")
@@ -237,16 +264,29 @@ def open_folder():
     try:
         data = request.json
         file_path = data.get('path')
+        camera_id = data.get('cameraId')
+        video_time_id = data.get('videoTimeId')
 
-        if not file_path:
-            return jsonify({'status': 'error', 'message': '未提供文件路径'})
+        if not file_path or not camera_id or not video_time_id:
+            return jsonify({'status': 'error', 'message': '参数不完整，需要提供文件路径、摄像头ID和视频时间ID'})
+
+        # 查询数据库检查是否存在跟踪结果
+        query = """
+            SELECT tracking_video_path FROM camera_videos 
+            WHERE camera_id = %s AND id = %s AND tracking_video_path IS NOT NULL
+        """
+        result = db_interface.execute_query(query, (camera_id, video_time_id))
+
+        if not result:
+            return jsonify({'status': 'error', 'message': '未找到目标跟踪结果'})
+
+        tracking_path = result[0]['tracking_video_path']
+
+        if not tracking_path or not os.path.exists(tracking_path):
+            return jsonify({'status': 'error', 'message': '目标跟踪结果文件不存在'})
 
         # 获取文件所在目录
-        folder_path = os.path.dirname(os.path.abspath(file_path))
-
-        # 检查目录是否存在
-        if not os.path.exists(folder_path):
-            return jsonify({'status': 'error', 'message': f'目录不存在: {folder_path}'})
+        folder_path = os.path.dirname(os.path.abspath(tracking_path))
 
         # 根据操作系统打开文件夹
         import platform
@@ -273,32 +313,44 @@ def play_in_local_player():
     try:
         data = request.json
         file_path = data.get('path')
+        camera_id = data.get('cameraId')
+        video_time_id = data.get('videoTimeId')
 
-        if not file_path:
-            return jsonify({'status': 'error', 'message': '未提供文件路径'})
+        if not file_path or not camera_id or not video_time_id:
+            return jsonify({'status': 'error', 'message': '参数不完整，需要提供文件路径、摄像头ID和视频时间ID'})
 
-        # 检查文件是否存在
-        if not os.path.exists(file_path):
-            return jsonify({'status': 'error', 'message': f'文件不存在: {file_path}'})
+        # 查询数据库检查是否存在跟踪结果
+        query = """
+            SELECT tracking_video_path FROM camera_videos 
+            WHERE camera_id = %s AND id = %s AND tracking_video_path IS NOT NULL
+        """
+        result = db_interface.execute_query(query, (camera_id, video_time_id))
 
-        # 使用系统默认程序打开视频文件
+        if not result:
+            return jsonify({'status': 'error', 'message': '未找到目标跟踪结果'})
+
+        tracking_path = result[0]['tracking_video_path']
+
+        if not tracking_path or not os.path.exists(tracking_path):
+            return jsonify({'status': 'error', 'message': '目标跟踪结果文件不存在'})
+
+        # 根据操作系统打开视频
         import platform
         import subprocess
 
         system = platform.system()
         if system == 'Windows':
-            os.startfile(file_path)
+            os.startfile(tracking_path)
         elif system == 'Darwin':  # macOS
-            subprocess.call(['open', file_path])
+            subprocess.call(['open', tracking_path])
         else:  # Linux
-            subprocess.call(['xdg-open', file_path])
+            subprocess.call(['xdg-open', tracking_path])
 
-        return jsonify({'status': 'success', 'message': f'已在本地播放器中打开视频: {file_path}'})
+        return jsonify({'status': 'success', 'message': f'已打开视频: {tracking_path}'})
 
     except Exception as e:
-        logger.error(f"在本地播放器中播放视频失败: {str(e)}")
-        return jsonify({'status': 'error', 'message': f'在本地播放器中播放视频失败: {str(e)}'})
-
+        logger.error(f"播放视频失败: {str(e)}")
+        return jsonify({'status': 'error', 'message': f'播放视频失败: {str(e)}'})
 @app.route('/filter', methods=['POST'])
 def filter_records():
     try:
