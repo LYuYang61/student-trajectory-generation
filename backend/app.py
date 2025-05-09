@@ -63,6 +63,31 @@ person_tracker = None
 def hello_world():
     return 'Hello World'
 
+# JWT验证装饰器
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        auth_header = request.headers.get('Authorization')
+
+        if auth_header and auth_header.startswith('Bearer '):
+            token = auth_header.split(" ")[1]
+
+        if not token:
+            return jsonify({'message': '缺少令牌！', 'success': False}), 401
+
+        try:
+            payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = payload
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': '令牌已过期！', 'success': False}), 401
+        except jwt.InvalidTokenError:
+            return jsonify({'message': '无效的令牌！', 'success': False}), 401
+
+        return f(current_user, *args, **kwargs)
+
+    return decorated
+
 
 @app.route('/stopTrack', methods=['POST'])
 def stop_track():
@@ -686,6 +711,43 @@ def feature_matching():
         logging.error(f"特征匹配错误: {str(e)}")
         return jsonify({'status': 'error', 'message': f'特征匹配错误: {str(e)}'})
 
+
+# 保存学生轨迹API
+@app.route('/trajectories', methods=['POST'])
+@token_required
+def save_trajectory(current_user):
+    try:
+        data = request.get_json()
+
+        # 验证必要的轨迹数据
+        if not data.get('studentId') or not data.get('timeRange'):
+            return jsonify({
+                'success': False,
+                'message': '缺少必要的轨迹信息'
+            }), 400
+
+        # 调用轨迹保存函数
+        trajectory_id = reid_processor.save_trajectory_to_database(data, db_interface)
+
+        if trajectory_id:
+            return jsonify({
+                'success': True,
+                'message': '轨迹保存成功',
+                'trajectoryId': trajectory_id
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': '轨迹保存失败'
+            }), 500
+
+    except Exception as e:
+        logger.error(f"保存轨迹API错误: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({
+            'success': False,
+            'message': f'保存轨迹失败: {str(e)}'
+        }), 500
 
 @app.route('/cameras', methods=['GET'])
 def get_all_cameras():
@@ -1327,31 +1389,55 @@ def import_students():
         return jsonify({'error': str(e)}), 500
 
 
-# JWT验证装饰器
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = None
-        auth_header = request.headers.get('Authorization')
+@app.route('/students/<string:student_id>/trajectories', methods=['GET'])
+def get_student_trajectories(student_id):
+    """获取指定学生的轨迹信息"""
+    try:
+        # 查询该学生的所有轨迹记录
+        with db_interface.conn.cursor() as cursor:
+            query = """
+                SELECT id, tracking_session_id, start_time, end_time, 
+                       camera_sequence, total_distance, average_speed, created_at
+                FROM student_trajectories
+                WHERE student_id = %s
+                ORDER BY created_at DESC
+            """
+            cursor.execute(query, (student_id,))
+            trajectories = []
+            columns = [col[0] for col in cursor.description]
+            for row in cursor.fetchall():
+                trajectory = dict(zip(columns, row))
 
-        if auth_header and auth_header.startswith('Bearer '):
-            token = auth_header.split(" ")[1]
+                # 格式化日期时间字段
+                for date_field in ['start_time', 'end_time', 'created_at']:
+                    if trajectory.get(date_field):
+                        trajectory[date_field] = trajectory[date_field].strftime("%Y-%m-%d %H:%M:%S")
 
-        if not token:
-            return jsonify({'message': '缺少令牌！', 'success': False}), 401
+                # 获取轨迹详细点位信息
+                cursor.execute(
+                    "SELECT path_points FROM student_trajectories WHERE id = %s",
+                    (trajectory['id'],)
+                )
+                path_result = cursor.fetchone()
+                if path_result and path_result[0]:
+                    # 路径点可能是JSON字符串，需要解析
+                    import json
+                    try:
+                        path_points = json.loads(path_result[0]) if isinstance(path_result[0], str) else path_result[0]
+                        trajectory['path_points'] = path_points
+                    except:
+                        trajectory['path_points'] = []
 
-        try:
-            payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
-            current_user = payload
-        except jwt.ExpiredSignatureError:
-            return jsonify({'message': '令牌已过期！', 'success': False}), 401
-        except jwt.InvalidTokenError:
-            return jsonify({'message': '无效的令牌！', 'success': False}), 401
+                trajectories.append(trajectory)
 
-        return f(current_user, *args, **kwargs)
-
-    return decorated
-
+        return jsonify({
+            'success': True,
+            'data': trajectories
+        })
+    except Exception as e:
+        logger.error(f"获取学生轨迹失败: {str(e)}")
+        logger.error(traceback.format_exc())
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 # 用户注册
 @app.route('/auth/register', methods=['POST'])

@@ -1,4 +1,7 @@
+import json
 import os
+import random
+import time
 import traceback
 
 import numpy as np
@@ -10,7 +13,7 @@ from scipy.spatial.distance import cosine
 import sys
 import logging
 import datetime
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 import pandas as pd
 
 # 配置全局日志
@@ -1188,3 +1191,122 @@ class ReIDProcessor:
             logger.error(f"特征匹配过程中出错: {str(e)}")
             logger.error(traceback.format_exc())
             return []
+
+    def save_trajectory_to_database(self, trajectory_data, db_interface):
+        """
+        将学生轨迹信息保存到数据库
+
+        参数:
+            trajectory_data: 包含轨迹信息的字典，包括学号、时间区间、经过摄像头、轨迹长度、总用时等
+            db_interface: 数据库接口对象
+
+        返回:
+            成功返回轨迹记录ID，失败返回None
+        """
+        try:
+            # 确保数据库连接有效
+            if db_interface.conn.open is False:
+                db_interface.reconnect()
+
+            cursor = db_interface.conn.cursor()
+
+            # 从轨迹数据中提取信息
+            student_id = trajectory_data.get('studentId')
+            time_range = trajectory_data.get('timeRange', [])
+            start_time = time_range[0] if len(time_range) > 0 else None
+            end_time = time_range[1] if len(time_range) > 1 else None
+            camera_sequence = trajectory_data.get('traversedCameras', [])
+            total_distance = trajectory_data.get('trajectoryLength', 0)
+            total_duration = trajectory_data.get('totalTime', '0分钟')
+
+            # 生成轨迹会话ID (可以用时间戳加随机数)
+            tracking_session_id = f"track_{int(time.time())}_{random.randint(1000, 9999)}"
+
+            # 处理路径点数据
+            path_points = []
+            for point in trajectory_data.get('trajectoryPoints', []):
+                if point.get('type') == 'camera':  # 只保存摄像头点作为关键点
+                    path_points.append({
+                        'camera_id': point.get('cameraId'),
+                        'camera_name': point.get('name', f"摄像头{point.get('cameraId')}"),
+                        'timestamp': point.get('timestamp'),
+                        'location_x': point.get('position', [0, 0])[0],
+                        'location_y': point.get('position', [0, 0])[1],
+                        'confidence': point.get('confidence', 1.0)
+                    })
+
+            # 将路径点转换为JSON字符串
+            path_points_json = json.dumps(path_points)
+
+            # 将摄像头序列连接为字符串，包含摄像头名称
+            camera_sequence_str = ','.join([f"{cam['id']}({cam.get('name', '')})" for cam in
+                                            trajectory_data.get('cameras',
+                                                                [])]) if 'cameras' in trajectory_data else ','.join(
+                camera_sequence)
+
+            # 计算平均速度
+            # 解析总用时为分钟数
+            duration_minutes = 0
+            if '小时' in total_duration:
+                parts = total_duration.split('小时')
+                hours = int(parts[0])
+                minutes_part = parts[1].replace('分钟', '').strip()
+                minutes = int(minutes_part) if minutes_part else 0
+                duration_minutes = hours * 60 + minutes
+            else:
+                duration_minutes = int(total_duration.replace('分钟', '').strip())
+
+            # 计算平均速度 (米/分钟)
+            average_speed = total_distance / duration_minutes if duration_minutes > 0 else 0
+
+            # 插入轨迹记录
+            insert_sql = """
+            INSERT INTO student_trajectories 
+            (student_id, tracking_session_id, start_time, end_time, path_points, 
+             camera_sequence, total_distance, average_speed)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """
+
+            cursor.execute(insert_sql, (
+                student_id,
+                tracking_session_id,
+                start_time,
+                end_time,
+                path_points_json,
+                camera_sequence_str,
+                total_distance,
+                average_speed
+            ))
+
+            db_interface.conn.commit()
+            trajectory_id = cursor.lastrowid
+
+            logger.info(f"已保存学生轨迹: ID={trajectory_id}, 学号={student_id}, 会话ID={tracking_session_id}")
+            logger.info(f"轨迹摄像头序列: {camera_sequence_str}")
+            logger.info(f"轨迹长度: {total_distance}米, 用时: {total_duration}, 平均速度: {average_speed:.2f}米/分钟")
+
+            return trajectory_id
+
+        except Exception as e:
+            logger.error(f"保存轨迹数据失败: {str(e)}")
+            logger.error(traceback.format_exc())
+            return None
+        finally:
+            if 'cursor' in locals():
+                cursor.close()
+
+    def get(self, param):
+        """
+        获取指定参数的值
+
+        Args:
+            param: 参数名称
+
+        Returns:
+            参数值
+        """
+        if hasattr(self, param):
+            return getattr(self, param)
+        else:
+            logger.warning(f"参数 {param} 不存在")
+            return None

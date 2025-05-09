@@ -85,10 +85,15 @@
         </el-table-column>
         <el-table-column
           label="操作"
-          fixed="right"
-          width="150">
+          width="250">
           <template slot-scope="scope">
             <template v-if="isAdmin">
+              <el-button
+                type="info"
+                size="mini"
+                @click="viewTrajectories(scope.row)"
+                :disabled="!hasTrajectories(scope.row.student_id)"
+              >查看轨迹</el-button>
               <el-button
                 size="mini"
                 @click="handleEdit(scope.row)">编辑</el-button>
@@ -101,6 +106,7 @@
           </template>
         </el-table-column>
       </el-table>
+
       <div class="pagination-bar">
         <div class="left-section">
           <span>共 {{ pagination.total }} 条</span>
@@ -190,6 +196,45 @@
         <el-button type="primary" @click="importExcelData">确认导入</el-button>
       </div>
     </el-dialog>
+
+<!-- 轨迹信息对话框 -->
+<el-dialog
+  title="学生轨迹信息"
+  :visible.sync="trajectoryDialogVisible"
+  width="80%"
+  :before-close="handleCloseTrajectoryDialog">
+
+  <div v-if="studentTrajectories.length === 0" class="empty-data">
+    暂无轨迹数据
+  </div>
+
+  <div v-else>
+    <el-tabs v-model="activeTrajectoryTab">
+      <el-tab-pane
+        v-for="trajectory in studentTrajectories"
+        :key="trajectory.id"
+        :label="`轨迹 ${trajectory.id}`"
+        :name="String(trajectory.id)">
+
+        <el-descriptions title="轨迹基本信息" :column="1" border>
+          <el-descriptions-item label="轨迹ID">{{ trajectory.id }}</el-descriptions-item>
+          <el-descriptions-item label="开始时间">{{ trajectory.start_time }}</el-descriptions-item>
+          <el-descriptions-item label="结束时间">{{ trajectory.end_time }}</el-descriptions-item>
+          <el-descriptions-item label="摄像头序列">{{ trajectory.camera_sequence }}</el-descriptions-item>
+          <el-descriptions-item label="总距离(米)">{{ trajectory.total_distance }}</el-descriptions-item>
+          <el-descriptions-item label="平均速度(米/秒)">{{ trajectory.average_speed }}</el-descriptions-item>
+          <el-descriptions-item label="创建时间">{{ trajectory.created_at }}</el-descriptions-item>
+          <el-descriptions-item label="轨迹路径" :span="3">{{ formatTrajectoryPath(trajectory.path_points) }}
+          </el-descriptions-item>
+        </el-descriptions>
+      </el-tab-pane>
+    </el-tabs>
+  </div>
+
+  <span slot="footer" class="dialog-footer">
+    <el-button @click="trajectoryDialogVisible = false">关闭</el-button>
+  </span>
+</el-dialog>
   </div>
 </template>
 
@@ -214,6 +259,10 @@ export default {
       isAdmin: false,
       pageSizes: [10, 20, 30, 40],
       students: [],
+      trajectoryDialogVisible: false,
+      studentTrajectories: [],
+      activeTrajectoryTab: '0',
+      studentTrajectoriesMap: {},
       selectedStudents: [],
       searchKeyword: '',
       pagination: {
@@ -260,6 +309,91 @@ export default {
     this.checkUserRole()
   },
   methods: {
+    // 查看学生轨迹
+    viewTrajectories (student) {
+      this.loadStudentTrajectories(student.student_id)
+    },
+
+    // 加载学生轨迹数据
+    async loadStudentTrajectories (studentId) {
+      try {
+        // 如果已经加载过该学生的轨迹，直接从缓存获取
+        if (this.studentTrajectoriesMap[studentId]) {
+          this.studentTrajectories = this.studentTrajectoriesMap[studentId]
+          this.trajectoryDialogVisible = true
+          return
+        }
+
+        this.$loading({ lock: true, text: '加载轨迹数据中...' })
+
+        const response = await this.$http.get(`/students/${studentId}/trajectories`)
+
+        console.log('获取轨迹数据:', response.data)
+
+        if (response.data.success) {
+          this.studentTrajectories = response.data.data
+          this.studentTrajectoriesMap[studentId] = this.studentTrajectories
+
+          if (this.studentTrajectories.length > 0) {
+            this.activeTrajectoryTab = String(this.studentTrajectories[0].id)
+          }
+        } else {
+          this.$message.error('获取轨迹数据失败')
+        }
+
+        console.log('轨迹数据:', this.studentTrajectories)
+
+        this.trajectoryDialogVisible = true
+      } catch (error) {
+        console.error('获取轨迹数据失败:', error)
+        this.$message.error('获取轨迹数据失败: ' + error.message)
+      } finally {
+        this.$loading().close()
+      }
+    },
+
+    formatTrajectoryPath (pathPoints) {
+      try {
+        // 解析路径点JSON字符串
+        let points
+        if (typeof pathPoints === 'string') {
+          points = JSON.parse(pathPoints)
+        } else {
+          points = pathPoints // 已经是对象时直接使用
+        }
+
+        if (!Array.isArray(points) || points.length === 0) {
+          return '无路径点信息'
+        }
+
+        // 提取每个点的摄像头ID、名称和时间
+        return points.map(point => {
+          // 格式化时间为 HH:MM
+          const time = point.timestamp ? new Date(point.timestamp).toLocaleString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit'
+          }) : '未知时间'
+
+          return `${point.camera_name || '摄像头' + point.camera_id}(${time})`
+        }).join(' -> ')
+      } catch (error) {
+        console.error('解析路径点出错:', error)
+        return '路径点格式无效'
+      }
+    },
+
+    // 关闭轨迹对话框
+    handleCloseTrajectoryDialog () {
+      this.trajectoryDialogVisible = false
+    },
+
+    // 判断学生是否有轨迹记录
+    hasTrajectories (studentId) {
+      // 简单实现：所有学生都显示轨迹按钮
+      // 实际应用中可以预先加载一个有轨迹记录的学生ID列表
+      return true
+    },
+
     checkUserRole () {
       const token = localStorage.getItem('token')
       if (!token) return

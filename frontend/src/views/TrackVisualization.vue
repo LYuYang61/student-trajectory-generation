@@ -231,6 +231,7 @@ import Menu from '@/components/Menu.vue'
 import BaiduMap from '@/components/map.vue'
 import io from 'socket.io-client'
 import {filterRecords, analyzeSpacetimeConstraints, extractFeatures, matchFeatures} from '../api/api'
+import axios from 'axios'
 
 export default {
   name: 'TrackVisualization',
@@ -1056,12 +1057,34 @@ export default {
     nextStep () {
       if (this.activeStep < 3) {
         this.activeStep++
-      } else {
-        // 完成操作
-        this.$message({
-          message: '处理完成',
-          type: 'success'
-        })
+      } else if (this.activeStep === 3) {
+        // 构建轨迹数据
+        const trajectoryData = {
+          studentId: this.filterForm.studentId,
+          timeRange: this.filterForm.timeRange,
+          traversedCameras: this.traversedCameras,
+          trajectoryLength: this.calculateTrajectoryLength(),
+          totalTime: this.calculateTotalTime(),
+          trajectoryPoints: this.trajectoryData.points,
+          cameras: this.trajectoryData.cameras
+        }
+
+        // 发送请求保存轨迹数据
+        axios.post('/api/trajectories', trajectoryData)
+          .then(response => {
+            if (response.data.success) {
+              this.$message({
+                message: '轨迹数据保存成功',
+                type: 'success'
+              })
+            } else {
+              this.$message.warning('轨迹数据保存失败')
+            }
+          })
+          .catch(error => {
+            console.error('保存轨迹数据错误:', error)
+            this.$message.error('轨迹数据保存失败，请稍后再试')
+          })
       }
     }
   }

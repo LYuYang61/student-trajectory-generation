@@ -75,3 +75,19 @@ CREATE TABLE users (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP -- 更新时间
 );
 
+-- 修改 `student_trajectories` 表，更好地存储学生轨迹数据
+DROP TABLE IF EXISTS student_trajectories;
+CREATE TABLE student_trajectories (
+    id INTEGER PRIMARY KEY AUTO_INCREMENT,     -- 自增主键
+    student_id VARCHAR(50),                    -- 学生学号
+    tracking_session_id VARCHAR(50),           -- 轨迹会话ID (用于分组同一次跟踪的记录)
+    start_time DATETIME,                       -- 轨迹开始时间
+    end_time DATETIME,                         -- 轨迹结束时间
+    path_points JSON,                          -- 轨迹路径点 (存储格式: [{camera_id, timestamp, location_x, location_y, confidence},...])
+    camera_sequence VARCHAR(255),              -- 摄像头序列 (例如: "1,3,5,2" 记录学生经过的摄像头顺序)
+    total_distance DOUBLE,                     -- 总移动距离
+    average_speed DOUBLE,                      -- 平均速度
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP, -- 记录创建时间
+    FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE
+);
+
