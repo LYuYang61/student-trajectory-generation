@@ -15,7 +15,7 @@
       <div class="login-box">
         <div class="login-logo">
           <img src="../assets/hfut.png" alt="logo"/>
-          <h2>校园监控追踪系统</h2>
+          <h2>基于深度学习的校园学生轨迹追踪系统设计与实现</h2>
         </div>
         <el-form :model="loginForm" :rules="loginRules" ref="loginForm">
           <el-form-item prop="username">

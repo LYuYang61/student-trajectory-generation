@@ -618,23 +618,33 @@ class ReIDProcessor:
             logger.error(f"提取帧时发生错误: {str(e)}", exc_info=True)
             return []
 
-    def _detect_person_in_frames(self, frames, save_dir=None):
+    def _detect_person_in_frames(self, frames, save_dir=None, camera_id=None):
         """
-        在帧中检测人物并可选择保存到本地
+        使用YOLOv8在帧中检测人物并可选择保存到本地
 
         Args:
             frames: 视频帧列表
             save_dir: 保存检测结果的目录路径，如不提供则不保存
+            camera_id: 摄像头ID，用于命名保存的图像
 
         Returns:
             检测到的人物图像列表
         """
-        logger.info(f"开始在 {len(frames)} 帧中检测人物")
+        logger.info(f"开始在 {len(frames)} 帧中检测人物，使用YOLOv8模型")
 
         try:
-            # 加载人物检测模型（此处使用简单的HOG检测器作为示例）
-            hog = cv2.HOGDescriptor()
-            hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+            # 使用YOLOv8替代HOG检测器
+            import torch
+            from ultralytics import YOLO
+
+            # 加载YOLOv8模型
+            model_path = os.path.join(os.path.dirname(__file__), '../resources/models/yolov8m.pt')
+            if not os.path.exists(model_path):
+                logger.info(f"YOLOv8模型不存在于 {model_path}，尝试下载预训练模型")
+                model = YOLO('yolov8m.pt')  # 自动下载预训练模型
+            else:
+                logger.info(f"加载本地YOLOv8模型: {model_path}")
+                model = YOLO(model_path)
 
             person_images = []
 
@@ -646,36 +656,88 @@ class ReIDProcessor:
             # 当前时间戳用于文件名
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+            # 摄像头ID字符串，如果没有则使用unknown
+            cam_id_str = f"cam{camera_id}" if camera_id is not None else "unknown"
+
+            # 设置检测参数
+            conf_threshold = 0.25  # 置信度阈值
+            person_class_id = 0  # YOLOv8中行人的类别ID是0
+
+            # ReID模型通常期望的输入尺寸
+            target_width = 128  # ReID模型期望的宽度
+            target_height = 256  # ReID模型期望的高度
+
+            # 最小尺寸要求，避免太小的检测框
+            min_width = 30
+            min_height = 90
+
+            # 跟踪已保存的行人检测总数，用于生成连续编号
+            person_count = 0
+
             for i, frame in enumerate(frames):
-                # 检测人物
-                boxes, weights = hog.detectMultiScale(frame, winStride=(8, 8), padding=(4, 4), scale=1.05)
+                # 执行检测
+                results = model(frame, conf=conf_threshold, classes=[person_class_id])
 
-                # 处理每个检测到的人物
-                for j, (x, y, w, h) in enumerate(boxes):
-                    # 调整边界框，确保不超出图像范围
-                    x = max(0, x)
-                    y = max(0, y)
-                    w = min(w, frame.shape[1] - x)
-                    h = min(h, frame.shape[0] - y)
+                for j, result in enumerate(results):
+                    boxes = result.boxes  # 获取边界框
 
-                    if w > 0 and h > 0:
+                    # 处理每个检测到的人物
+                    for k, box in enumerate(boxes):
+                        # 获取边界框坐标
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                        conf = float(box.conf[0])
+
+                        # 计算边界框尺寸
+                        box_width = x2 - x1
+                        box_height = y2 - y1
+
+                        # 忽略太小的检测框
+                        if box_width < min_width or box_height < min_height:
+                            logger.info(f"跳过太小的行人边界框: {box_width}x{box_height}, 帧{i}, 检测{k}")
+                            continue
+
+                        # 优化边界框 - 扩展框让身体完整显示（尤其是头部和脚部）
+                        # 计算扩展比例，保持纵横比约为1:2（身高:宽度=2:1）
+                        aspect_ratio = box_height / box_width
+
+                        if aspect_ratio < 2:  # 如果人物太"扁"，增加高度
+                            height_extension = int((2 * box_width - box_height) / 2)
+                            y1 = max(0, y1 - height_extension)
+                            y2 = min(frame.shape[0], y2 + height_extension)
+                        elif aspect_ratio > 3:  # 如果人物太"瘦"，增加宽度
+                            width_extension = int((box_height / 3 - box_width) / 2)
+                            x1 = max(0, x1 - width_extension)
+                            x2 = min(frame.shape[1], x2 + width_extension)
+
                         # 提取人物图像
-                        person_img = frame[y:y + h, x:x + w]
-                        person_images.append(person_img)
+                        person_img = frame[y1:y2, x1:x2]
+                        if person_img.size == 0:
+                            logger.warning(f"跳过空白人物图像: 帧{i}, 检测{k}")
+                            continue
+
+                        # 调整大小为ReID模型期望的输入尺寸
+                        person_img_resized = cv2.resize(person_img, (target_width, target_height),
+                                                        interpolation=cv2.INTER_AREA)
+
+                        # 添加到结果列表
+                        person_images.append(person_img_resized)
 
                         # 保存到本地
                         if save_dir:
-                            filename = f"person_{timestamp}_frame{i}_det{j}.jpg"
+                            # 新的命名格式: person_摄像头ID_时间戳_帧索引_检测索引_连续编号_置信度.jpg
+                            filename = f"person_{cam_id_str}_idx{person_count:04d}_conf{conf:.2f}.jpg"
                             filepath = os.path.join(save_dir, filename)
-                            cv2.imwrite(filepath, person_img)
-                            logger.info(f"已保存行人图像: {filepath}")
+                            cv2.imwrite(filepath, person_img_resized)
+                            logger.info(f"已保存行人图像: {filepath}, 尺寸: {target_width}x{target_height}")
 
-            logger.info(f"人物检测完成，共提取 {len(person_images)} 个人物图像")
+                            # 更新连续编号
+                            person_count += 1
+
+            logger.info(f"人物检测完成，使用YOLOv8模型共提取 {len(person_images)} 个人物图像")
             return person_images
 
         except Exception as e:
-            logger.error(f"人物检测失败: {str(e)}", exc_info=True)
-            return []
+            logger.error(f"YOLOv8人物检测失败: {str(e)}", exc_info=True)
 
     def extract_features(self, records, algorithm='mgn', callback=None, save_dir=None):
         """
@@ -801,7 +863,7 @@ class ReIDProcessor:
 
                         if frames:
                             # 从帧中检测人物
-                            person_images = self._detect_person_in_frames(frames, save_dir=save_dir)
+                            person_images = self._detect_person_in_frames(frames, save_dir=save_dir, camera_id=record.get('camera_id'))
                             extracted_person_images = person_images  # 保存所有检测到的人物图像
 
                             if person_images:
