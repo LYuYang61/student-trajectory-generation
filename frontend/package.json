@@ -16,6 +16,7 @@
     "axios": "^0.27.2",
     "bmapgl": "^1.0.0",
     "element-ui": "^2.15.9",
+    "hls.js": "^1.6.2",
     "socket.io": "^3.1.0",
     "socket.io-client": "^3.1.0",
     "vue": "^2.5.2",

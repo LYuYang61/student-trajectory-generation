@@ -101,6 +101,28 @@
         <el-form-item label="Y坐标" prop="location_y">
           <el-input v-model.number="cameraForm.location_y" placeholder="请输入Y坐标"></el-input>
         </el-form-item>
+        <el-form-item label="IP地址" prop="ip_address">
+          <el-input v-model="cameraForm.ip_address" placeholder="例如：192.168.1.100"></el-input>
+        </el-form-item>
+        <el-form-item label="端口" prop="port">
+          <el-input-number v-model.number="cameraForm.port" :min="1" :max="65535" placeholder="默认554"></el-input-number>
+        </el-form-item>
+        <el-form-item label="协议" prop="protocol">
+          <el-select v-model="cameraForm.protocol" placeholder="选择协议">
+            <el-option label="RTSP" value="rtsp"></el-option>
+            <el-option label="HTTP" value="http"></el-option>
+            <el-option label="RTMP" value="rtmp"></el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="用户名" prop="username">
+          <el-input v-model="cameraForm.username" placeholder="可选"></el-input>
+        </el-form-item>
+        <el-form-item label="密码" prop="password">
+          <el-input v-model="cameraForm.password" type="password" placeholder="可选"></el-input>
+        </el-form-item>
+        <el-form-item label="RTSP地址" prop="rtsp_url">
+          <el-input v-model="cameraForm.rtsp_url" placeholder="完整RTSP URL，优先级高于上面的配置"></el-input>
+        </el-form-item>
       </el-form>
       <span slot="footer" class="dialog-footer">
         <el-button @click="dialogVisible = false">取 消</el-button>
@@ -120,6 +142,9 @@
         </div>
         <div class="video-container">
           <video ref="liveVideo" autoplay class="camera-video"></video>
+            <div v-if="isLoadingLiveVideo" class="video-loading">
+              <el-loading type="primary" text="加载视频流..."></el-loading>
+            </div>
         </div>
       </div>
       <span slot="footer" class="dialog-footer">
@@ -335,6 +360,7 @@
 <script>
 import Menu from '../components/Menu.vue'
 import CameraMapComponent from '@/components/CameraMapComponent.vue'
+import Hls from 'hls.js'
 import {
   getAllCameras,
   addCamera,
@@ -344,6 +370,7 @@ import {
   trackHistoryVideo,
   stopTrackingRequest, openFolder, playInLocalPlayer
 } from '../api/api'
+import axios from 'axios'
 
 export default {
   name: 'CameraManagement',
@@ -360,6 +387,9 @@ export default {
   data () {
     return {
       // 其他状态...
+      isLoadingLiveVideo: false,
+      streamRetryCount: 0,
+      streamRetryMax: 3,
       isAdmin: false,
       isTrackingMinimized: false,
       trackingVideoPath: null, // 存储本地跟踪视频路径
@@ -409,7 +439,13 @@ export default {
         camera_id: null,
         name: '',
         location_x: 0,
-        location_y: 0
+        location_y: 0,
+        ip_address: '', // 新增
+        port: 554, // 新增
+        protocol: 'rtsp', // 新增
+        username: '', // 新增
+        password: '', // 新增
+        rtsp_url: '' // 新增
       },
       cameraRules: {
         name: [
@@ -423,6 +459,12 @@ export default {
         location_y: [
           { required: true, message: '请输入Y坐标', trigger: 'blur' },
           { type: 'number', message: '坐标必须为数字值', trigger: 'blur' }
+        ],
+        ip_address: [
+          { pattern: /^(\d{1,3}\.){3}\d{1,3}$/, message: 'IP地址格式不正确', trigger: 'blur' }
+        ],
+        port: [
+          { type: 'number', message: '端口必须为数字', trigger: 'blur' }
         ]
       }
     }
@@ -449,6 +491,10 @@ export default {
     // 确保在组件销毁前停止所有视频流和跟踪任务
     this.stopLiveVideo()
     this.stopTracking()
+    // 添加: 确保在离开页面时停止服务器端的所有流
+    if (this.selectedCamera && this.selectedCamera.camera_id) {
+      this.stopCameraStream()
+    }
   },
   methods: {
     checkUserRole () {
@@ -618,7 +664,13 @@ export default {
         camera_id: null,
         name: '',
         location_x: 118.719706, // 默认位置：校园中心点
-        location_y: 30.909573
+        location_y: 30.909573,
+        ip_address: '',
+        port: 554,
+        protocol: 'rtsp',
+        username: '',
+        password: '',
+        rtsp_url: ''
       }
       this.dialogVisible = true
     },
@@ -806,6 +858,74 @@ export default {
 
     // 启动实时视频
     startLiveVideo () {
+      if (!this.selectedCamera) {
+        this.$message.error('未选择有效的摄像头')
+        return
+      }
+
+      // 获取摄像头流地址
+      const apiUrl = `/api/cameras/${this.selectedCamera.camera_id}/stream`
+
+      // 先显示加载状态
+      this.isLoadingLiveVideo = true
+
+      axios.get(apiUrl)
+        .then(response => {
+          this.isLoadingLiveVideo = false
+
+          if (response.data && response.data.hls_url) {
+            const hlsUrl = response.data.hls_url
+            const video = this.$refs.liveVideo
+
+            if (video) {
+              if (Hls.isSupported()) {
+                // 清理之前的实例
+                if (this.hls) {
+                  this.hls.destroy()
+                }
+
+                // 创建新的HLS实例
+                this.hls = new Hls()
+                this.hls.loadSource(hlsUrl)
+                this.hls.attachMedia(video)
+                this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                  video.play()
+                    .catch(e => console.error('播放失败:', e))
+                })
+
+                // 添加错误处理
+                this.hls.on(Hls.Events.ERROR, (event, data) => {
+                  if (data.fatal) {
+                    this.$message.error(`视频流加载失败: ${data.type}`)
+                    this.stopLiveVideo()
+                  }
+                })
+              } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Safari直接支持HLS
+                video.src = hlsUrl
+                video.addEventListener('loadedmetadata', () => {
+                  video.play()
+                    .catch(e => console.error('播放失败:', e))
+                })
+              } else {
+                this.$message.error('您的浏览器不支持HLS视频流播放')
+              }
+            }
+          } else {
+            this.$message.error('获取视频流失败' + response.data.message)
+            this.startLocalCamera() // 回退使用本地摄像头
+          }
+        })
+        .catch(error => {
+          this.isLoadingLiveVideo = false
+          console.error('获取摄像头流失败:', error)
+          this.$message.error(`获取摄像头流失败: ${error.response.data.message || '网络错误'}`)
+          this.startLocalCamera() // 回退使用本地摄像头
+        })
+    },
+
+    // 添加一个回退的方法使用本地摄像头
+    startLocalCamera () {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         this.$message.error('您的浏览器不支持访问摄像头，请更换浏览器')
         return
@@ -825,11 +945,39 @@ export default {
         })
     },
 
-    // 停止实时视频
+    stopCameraStream () {
+      if (!this.selectedCamera) return
+
+      axios.post(`/api/cameras/${this.selectedCamera.camera_id}/stream/stop`)
+        .then(response => {
+          if (response.data && response.data.status === 'success') {
+            this.$message.success('已停止视频流')
+          }
+        })
+        .catch(error => {
+          console.error('停止视频流失败:', error)
+        })
+        .finally(() => {
+          this.stopLiveVideo() // 无论如何都停止本地播放
+        })
+    },
+    // 修改停止实时视频方法
     stopLiveVideo () {
       if (this.liveStream) {
         this.liveStream.getTracks().forEach(track => track.stop())
         this.liveStream = null
+      }
+
+      if (this.hls) {
+        this.hls.destroy()
+        this.hls = null
+      }
+
+      const video = this.$refs.liveVideo
+      if (video) {
+        video.pause()
+        video.src = ''
+        video.load()
       }
     },
 
@@ -1288,6 +1436,20 @@ export default {
   margin-top: 10px;
   display: flex;
   justify-content: space-around;
+}
+
+.video-loading {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(0, 0, 0, 0.5);
+  color: white;
+  z-index: 10;
 }
 
 </style>

@@ -91,3 +91,20 @@ CREATE TABLE student_trajectories (
     FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE
 );
 
+ALTER TABLE cameras
+ADD COLUMN ip_address VARCHAR(255) DEFAULT '' COMMENT '摄像头IP地址',
+ADD COLUMN port INTEGER DEFAULT 554 COMMENT '摄像头端口号',
+ADD COLUMN protocol VARCHAR(50) DEFAULT 'rtsp' COMMENT '访问协议(rtsp/http/rtmp等)',
+ADD COLUMN username VARCHAR(255) DEFAULT '' COMMENT '摄像头访问用户名',
+ADD COLUMN password VARCHAR(255) DEFAULT '' COMMENT '摄像头访问密码',
+ADD COLUMN rtsp_url VARCHAR(512) DEFAULT '' COMMENT '完整的RTSP URL';
+
+
+UPDATE cameras SET
+ip_address = '192.168.1.100',
+port = 554,
+protocol = 'rtsp',
+username = 'admin',
+password = 'admin',
+rtsp_url = 'rtsp://admin:admin@192.168.1.100:554/stream'
+WHERE camera_id = 1;
