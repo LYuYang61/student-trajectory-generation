@@ -9,6 +9,8 @@ import traceback
 from datetime import datetime, timedelta
 from functools import wraps
 
+import sys
+import importlib.util
 import bcrypt
 import jwt
 import networkx as nx
@@ -42,6 +44,60 @@ app.config['SECRET_KEY'] = 'lian'  # 推荐使用随机生成的密钥
 # 全局变量跟踪FFmpeg进程
 ffmpeg_processes = {}
 
+# 用于存储insert.py运行的线程
+insert_thread = None
+
+# 加载insert模块
+def load_insert_module():
+    try:
+        # 获取insert.py的绝对路径
+        insert_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'insert.py')
+
+        if not os.path.exists(insert_file_path):
+            logger.error(f"无法找到insert.py文件: {insert_file_path}")
+            return None
+
+        spec = importlib.util.spec_from_file_location("insert_module", insert_file_path)
+        insert_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(insert_module)
+        logger.info("成功加载insert.py模块")
+        return insert_module
+    except Exception as e:
+        logger.error(f"加载insert.py模块出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return None
+
+
+# 启动insert.py的函数
+def start_insert_process():
+    try:
+        insert_module = load_insert_module()
+        if insert_module:
+            logger.info("启动insert.py同步进程...")
+            # 在新线程中运行insert.py的main函数
+            insert_thread = threading.Thread(target=insert_module.main, daemon=True)
+            insert_thread.start()
+            logger.info("insert.py同步进程已启动")
+            return insert_thread
+        else:
+            logger.error("无法启动insert.py，模块加载失败")
+            return None
+    except Exception as e:
+        logger.error(f"启动insert.py出错: {str(e)}")
+        logger.error(traceback.format_exc())
+        return None
+
+# 初始化各模块
+# 确保 db_interface 初始化
+db_config = {
+    'type': 'mysql',
+    'host': 'localhost',
+    'port': 3306,
+    'user': 'root',
+    'password': '123456',
+    'database': 'trajectory',
+}
+
 # 应用退出时清理所有进程
 @atexit.register
 def cleanup_resources():
@@ -54,16 +110,6 @@ def cleanup_resources():
             except Exception as e:
                 logger.error(f"终止摄像头 {camera_id} 进程失败: {str(e)}")
 
-# 初始化各模块
-# 确保 db_interface 初始化
-db_config = {
-    'type': 'mysql',
-    'host': 'localhost',
-    'port': 3306,
-    'user': 'root',
-    'password': '123456',
-    'database': 'trajectory',
-}
 
 # 视频文件存储路径
 VIDEO_STORAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), './resources/videos')
@@ -79,6 +125,9 @@ campus_map = nx.Graph()  # 可以从文件或数据库加载校园地图
 spatiotemporal_analyzer = SpatiotemporalAnalysis(campus_map)
 # 创建全局跟踪器实例
 person_tracker = None
+
+# 在应用启动前启动insert.py
+insert_thread = start_insert_process()
 @app.route('/')
 def hello_world():
     return 'Hello World'
@@ -2246,5 +2295,12 @@ def stop_camera_stream(camera_id):
         logger.error(f"停止视频流出错: {str(e)}")
         return jsonify({"status": "error", "message": f"停止视频流出错: {str(e)}"})
 
+
 if __name__ == '__main__':
+    # 应用启动前确保insert.py已启动
+    if not insert_thread or not insert_thread.is_alive():
+        insert_thread = start_insert_process()
+        if not insert_thread:
+            logger.warning("insert.py启动失败，应用将继续运行但不会同步OSS文件")
+
     socketio.run(app, host="0.0.0.0", debug=True, port=5000, allow_unsafe_werkzeug=True)
