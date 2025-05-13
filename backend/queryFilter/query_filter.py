@@ -51,7 +51,6 @@ class QueryFilter:
 
         # 查询数据库
         records = self.db.query_student_records(
-            student_id=student_id,
             features=db_features,
             time_range=time_range,
             camera_ids=camera_ids

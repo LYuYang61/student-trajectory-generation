@@ -91,7 +91,7 @@
 
     <!-- 添加/编辑摄像头对话框 -->
     <el-dialog :title="dialogType === 'add' ? '添加监控' : '编辑监控'" :visible.sync="dialogVisible">
-      <el-form :model="cameraForm" :rules="cameraRules" ref="cameraForm" label-width="100px">
+      <el-form :model="cameraForm" :rules="cameraRules" ref="cameraForm" label-width="120px">
         <el-form-item label="监控名称" prop="name">
           <el-input v-model="cameraForm.name" placeholder="请输入监控名称"></el-input>
         </el-form-item>
@@ -721,7 +721,13 @@ export default {
         const formData = {
           name: this.cameraForm.name,
           location_x: this.cameraForm.location_x,
-          location_y: this.cameraForm.location_y
+          location_y: this.cameraForm.location_y,
+          ip_address: this.cameraForm.ip_address,
+          port: this.cameraForm.port,
+          protocol: this.cameraForm.protocol,
+          username: this.cameraForm.username,
+          password: this.cameraForm.password,
+          rtsp_url: this.cameraForm.rtsp_url
         }
 
         if (this.dialogType === 'add') {
@@ -833,6 +839,7 @@ export default {
     handleMonitoringToggle () {
       if (this.isMonitoring) {
         this.stopLiveVideo()
+        this.stopCameraStream()
         this.isMonitoring = false
       } else {
         this.startLiveVideo()
@@ -863,21 +870,28 @@ export default {
         return
       }
 
+      // 显示加载状态
+      this.isLoadingLiveVideo = true
+      this.streamRetryCount = 0
+
       // 获取摄像头流地址
       const apiUrl = `/api/cameras/${this.selectedCamera.camera_id}/stream`
 
-      // 先显示加载状态
-      this.isLoadingLiveVideo = true
+      // 打印调试信息
+      console.log(`请求摄像头流: ${apiUrl}`)
 
       axios.get(apiUrl)
         .then(response => {
           this.isLoadingLiveVideo = false
+          console.log('获取流地址响应:', response.data)
 
           if (response.data && response.data.hls_url) {
             const hlsUrl = response.data.hls_url
-            const video = this.$refs.liveVideo
+            console.log(`加载HLS流: ${hlsUrl}`)
 
+            const video = this.$refs.liveVideo
             if (video) {
+              // 尝试使用HLS.js播放视频
               if (Hls.isSupported()) {
                 // 清理之前的实例
                 if (this.hls) {
@@ -885,34 +899,80 @@ export default {
                 }
 
                 // 创建新的HLS实例
-                this.hls = new Hls()
+                this.hls = new Hls({
+                  debug: false, // 生产环境关闭调试
+                  enableWorker: true,
+                  lowLatencyMode: true,
+                  backBufferLength: 30,
+                  maxBufferLength: 30,
+                  liveSyncDurationCount: 3,
+                  fragLoadingTimeOut: 20000,
+                  manifestLoadingTimeOut: 20000,
+                  levelLoadingTimeOut: 20000,
+                  startLevel: 0
+                })
+
                 this.hls.loadSource(hlsUrl)
                 this.hls.attachMedia(video)
+
                 this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                  console.log('HLS流已解析，开始播放')
                   video.play()
-                    .catch(e => console.error('播放失败:', e))
+                    .then(() => {
+                      console.log('视频播放成功')
+                      this.$message.success('实时监控已启动')
+                    })
+                    .catch(e => {
+                      console.error('播放失败:', e)
+                      this.$message.warning('自动播放失败，请点击视频开始播放')
+                    })
                 })
 
                 // 添加错误处理
                 this.hls.on(Hls.Events.ERROR, (event, data) => {
+                  console.error('HLS错误:', data)
                   if (data.fatal) {
-                    this.$message.error(`视频流加载失败: ${data.type}`)
-                    this.stopLiveVideo()
+                    switch (data.type) {
+                      case Hls.ErrorTypes.NETWORK_ERROR:
+                        // 尝试恢复网络错误
+                        console.log('致命网络错误，尝试恢复')
+                        if (this.streamRetryCount < this.streamRetryMax) {
+                          this.streamRetryCount++
+                          console.log(`重试 ${this.streamRetryCount}/${this.streamRetryMax}`)
+                          this.hls.startLoad()
+                        } else {
+                          this.$message.error('视频流加载失败，请检查网络连接')
+                          this.stopLiveVideo()
+                        }
+                        break
+                      case Hls.ErrorTypes.MEDIA_ERROR:
+                        console.log('致命媒体错误，尝试恢复')
+                        this.hls.recoverMediaError()
+                        break
+                      default:
+                        this.$message.error(`视频流加载失败: ${data.details}`)
+                        this.stopLiveVideo()
+                        break
+                    }
                   }
                 })
               } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                 // Safari直接支持HLS
+                console.log('使用原生HLS支持播放')
                 video.src = hlsUrl
                 video.addEventListener('loadedmetadata', () => {
                   video.play()
+                    .then(() => console.log('视频播放成功'))
                     .catch(e => console.error('播放失败:', e))
                 })
               } else {
                 this.$message.error('您的浏览器不支持HLS视频流播放')
+                this.startLocalCamera() // 回退使用本地摄像头
               }
             }
           } else {
-            this.$message.error('获取视频流失败' + response.data.message)
+            console.error('响应中没有找到HLS URL:', response.data)
+            this.$message.error('获取视频流失败: ' + (response.data.message || '未知错误'))
             this.startLocalCamera() // 回退使用本地摄像头
           }
         })

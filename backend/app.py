@@ -1,7 +1,9 @@
 import atexit
 import base64
+import glob
 import logging
 import os
+import threading
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -31,14 +33,26 @@ from flask_cors import CORS, cross_origin
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-app = Flask(__name__, static_folder='.')
+app = Flask(__name__, static_folder='./', static_url_path='/')
 CORS(app, supports_credentials=True, resource={r'/*': {'origins': '*'}})
 socketio = SocketIO(app, cors_allowed_origins="*")  # 允许任何来源的连接
 detection_running = True
 app.config['SECRET_KEY'] = 'lian'  # 推荐使用随机生成的密钥
 
-# 全局变量用于存储正在运行的FFmpeg进程
-stream_processes = {}
+# 全局变量跟踪FFmpeg进程
+ffmpeg_processes = {}
+
+# 应用退出时清理所有进程
+@atexit.register
+def cleanup_resources():
+    for camera_id, process in ffmpeg_processes.items():
+        if process.poll() is None:  # 进程仍在运行
+            try:
+                process.terminate()
+                process.wait(timeout=2)
+                logger.info(f"应用退出，已终止摄像头 {camera_id} 的FFmpeg进程")
+            except Exception as e:
+                logger.error(f"终止摄像头 {camera_id} 进程失败: {str(e)}")
 
 # 初始化各模块
 # 确保 db_interface 初始化
@@ -759,7 +773,11 @@ def save_trajectory(current_user):
 def get_all_cameras():
     """获取所有摄像头信息"""
     try:
-        query = "SELECT camera_id, location_x, location_y, name FROM cameras"
+        query = """
+            SELECT camera_id, location_x, location_y, name, 
+            ip_address, port, protocol, username, password, rtsp_url 
+            FROM cameras
+        """
         cameras = db_interface.execute_query(query)
         return jsonify({
             'status': 'success',
@@ -767,7 +785,6 @@ def get_all_cameras():
         })
     except Exception as e:
         logger.error(f"获取摄像头信息失败: {e}")
-        logger.error(traceback.format_exc())
         return jsonify({
             'status': 'error',
             'message': str(e)
@@ -778,7 +795,12 @@ def get_all_cameras():
 def get_camera(camera_id):
     """获取单个摄像头信息"""
     try:
-        query = "SELECT camera_id, location_x, location_y, name FROM cameras WHERE camera_id = %s"
+        query = """
+            SELECT camera_id, location_x, location_y, name, 
+            ip_address, port, protocol, username, password, rtsp_url 
+            FROM cameras 
+            WHERE camera_id = %s
+        """
         if db_config['type'].lower() == 'sqlite':
             query = query.replace("%s", "?")
         cameras = db_interface.execute_query(query, (camera_id,))
@@ -809,6 +831,14 @@ def add_camera():
         location_x = data.get('location_x')
         location_y = data.get('location_y')
 
+        # 新增的字段
+        ip_address = data.get('ip_address')
+        port = data.get('port', 554)  # 默认端口554
+        protocol = data.get('protocol', 'rtsp')  # 默认协议rtsp
+        username = data.get('username')
+        password = data.get('password')
+        rtsp_url = data.get('rtsp_url')
+
         # 参数验证
         if not name or location_x is None or location_y is None:
             return jsonify({
@@ -825,13 +855,17 @@ def add_camera():
 
         # 插入新摄像头
         insert_query = """
-        INSERT INTO cameras (camera_id, name, location_x, location_y) 
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO cameras (camera_id, name, location_x, location_y, 
+        ip_address, port, protocol, username, password, rtsp_url) 
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         if db_config['type'].lower() == 'sqlite':
             insert_query = insert_query.replace("%s", "?")
 
-        db_interface.execute_query(insert_query, (new_id, name, location_x, location_y))
+        db_interface.execute_query(insert_query, (
+            new_id, name, location_x, location_y,
+            ip_address, port, protocol, username, password, rtsp_url
+        ))
         db_interface.conn.commit()
 
         return jsonify({
@@ -841,7 +875,13 @@ def add_camera():
                 'camera_id': new_id,
                 'name': name,
                 'location_x': location_x,
-                'location_y': location_y
+                'location_y': location_y,
+                'ip_address': ip_address,
+                'port': port,
+                'protocol': protocol,
+                'username': username,
+                'password': password,
+                'rtsp_url': rtsp_url
             }
         })
     except Exception as e:
@@ -861,6 +901,14 @@ def update_camera(camera_id):
         name = data.get('name')
         location_x = data.get('location_x')
         location_y = data.get('location_y')
+
+        # 新增的字段
+        ip_address = data.get('ip_address')
+        port = data.get('port')
+        protocol = data.get('protocol')
+        username = data.get('username')
+        password = data.get('password')
+        rtsp_url = data.get('rtsp_url')
 
         # 参数验证
         if not name or location_x is None or location_y is None:
@@ -883,13 +931,20 @@ def update_camera(camera_id):
         # 更新摄像头信息
         update_query = """
         UPDATE cameras 
-        SET name = %s, location_x = %s, location_y = %s 
+        SET name = %s, location_x = %s, location_y = %s,
+        ip_address = %s, port = %s, protocol = %s, 
+        username = %s, password = %s, rtsp_url = %s
         WHERE camera_id = %s
         """
         if db_config['type'].lower() == 'sqlite':
             update_query = update_query.replace("%s", "?")
 
-        db_interface.execute_query(update_query, (name, location_x, location_y, camera_id))
+        db_interface.execute_query(update_query, (
+            name, location_x, location_y,
+            ip_address, port, protocol,
+            username, password, rtsp_url,
+            camera_id
+        ))
         db_interface.conn.commit()
 
         return jsonify({
@@ -899,7 +954,13 @@ def update_camera(camera_id):
                 'camera_id': camera_id,
                 'name': name,
                 'location_x': location_x,
-                'location_y': location_y
+                'location_y': location_y,
+                'ip_address': ip_address,
+                'port': port,
+                'protocol': protocol,
+                'username': username,
+                'password': password,
+                'rtsp_url': rtsp_url
             }
         })
     except Exception as e:
@@ -2001,144 +2062,186 @@ def batch_delete_users(current_user):
             cursor.close()
 
 
-@app.route('/cameras/<int:camera_id>/stream')
+@app.route('/cameras/<int:camera_id>/stream', methods=['GET'])
 def stream_camera(camera_id):
-    """将IP摄像头的RTSP流转换为HLS流供前端播放"""
     try:
         # 查询摄像头信息
         with db_interface.conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM cameras WHERE camera_id = %s", (camera_id,))
-            columns = [col[0] for col in cursor.description]
-            camera = dict(zip(columns, cursor.fetchone())) if cursor.rowcount else None
+            cursor.execute(
+                "SELECT camera_id, name, ip_address, port, protocol, username, password, rtsp_url FROM cameras WHERE camera_id = %s",
+                (camera_id,))
+            camera = cursor.fetchone()
 
         if not camera:
-            return jsonify({'error': '摄像头不存在'}), 404
+            return jsonify({'status': 'error', 'message': f'未找到摄像头ID: {camera_id}'}), 404
+
+        # 将元组转换为字典
+        camera_dict = {
+            'camera_id': camera[0],
+            'name': camera[1],
+            'ip_address': camera[2],
+            'port': camera[3],
+            'protocol': camera[4],
+            'username': camera[5],
+            'password': camera[6],
+            'rtsp_url': camera[7]
+        }
 
         # 构建RTSP URL
-        rtsp_url = camera.get('rtsp_url')
-        if not rtsp_url and camera.get('ip_address'):
-            protocol = camera.get('protocol', 'rtsp')
-            ip = camera.get('ip_address')
-            port = camera.get('port', 554)
-            username = camera.get('username', '')
-            password = camera.get('password', '')
+        rtsp_url = camera_dict.get('rtsp_url')
+        if not rtsp_url and camera_dict.get('ip_address'):
+            # 如果没有提供完整URL但有IP地址，则根据配置构建URL
+            protocol = camera_dict.get('protocol', 'rtsp')
+            ip = camera_dict.get('ip_address')
+            port = camera_dict.get('port', 554)
+            username = camera_dict.get('username', '')
+            password = camera_dict.get('password', '')
 
             auth = f"{username}:{password}@" if username and password else ""
-            rtsp_url = f"{protocol}://{auth}{ip}:{port}/stream"
+            rtsp_url = f"{protocol}://{auth}{ip}:{port}/stream1"
 
         if not rtsp_url:
-            return jsonify({'error': '摄像头未配置RTSP地址'}), 400
+            # 测试用的模拟视频源，实际使用时可以移除
+            logger.warning(f"摄像头 {camera_id} 没有配置RTSP URL，使用本地视频文件替代")
+            rtsp_url = "test.mp4"  # 替换为实际测试视频路径
+
+        # 记录实际使用的RTSP URL
+        logger.info(f"摄像头 {camera_id} 使用的RTSP URL: {rtsp_url}")
 
         # 设置HLS输出目录
+        #output_dir = f"D:/streams/{camera_id}"
         output_dir = os.path.join(os.getcwd(), f"static/streams/{camera_id}")
         os.makedirs(output_dir, exist_ok=True)
 
-        # 如果已有对应摄像头的流进程在运行，先停止它
-        if camera_id in stream_processes:
+        # 清理旧文件
+        for file in glob.glob(f"{output_dir}/*.ts") + glob.glob(f"{output_dir}/*.m3u8"):
             try:
-                stream_processes[camera_id].terminate()
-                stream_processes[camera_id].wait(timeout=5)
-                logger.info(f"已停止摄像头 {camera_id} 的旧流程")
-            except Exception as e:
-                logger.error(f"停止旧流程失败: {str(e)}")
-                try:
-                    stream_processes[camera_id].kill()
-                except:
-                    pass
-            del stream_processes[camera_id]
+                os.remove(file)
+            except OSError as e:
+                logger.warning(f"删除文件失败: {file}, 错误: {str(e)}")
 
-        # 使用 FFmpeg 的绝对路径 (请替换为实际路径)
-        ffmpeg_path = "D:/0software/ffmpeg-7.0.2/bin/ffmpeg.exe"  # 替换为你系统中的实际路径
+        # FFmpeg参数设置
+        playlist_path = os.path.join(output_dir, "playlist.m3u8").replace('\\', '/')
+        segment_pattern = os.path.join(output_dir, "segment_%03d.ts").replace('\\', '/')
+        ffmpeg_bin = "D:/0software/ffmpeg-7.0.2/bin/ffmpeg.exe"
 
-        # 检查 FFmpeg 是否存在
-        if not os.path.exists(ffmpeg_path):
-            return jsonify({'error': 'FFmpeg 可执行文件不存在，请安装 FFmpeg 或提供正确的路径'}), 500
-
-        # 构建FFmpeg命令
         ffmpeg_cmd = [
-            ffmpeg_path,  # 使用绝对路径
-            '-i', rtsp_url,
-            '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            '-tune', 'zerolatency',
-            '-c:a', 'aac',
-            '-ar', '44100',
-            '-f', 'hls',
-            '-hls_time', '2',
-            '-hls_list_size', '6',
-            '-hls_flags', 'delete_segments',
-            '-hls_segment_type', 'mpegts',
-            '-hls_segment_filename', f"{output_dir}/segment_%03d.ts",
-            f"{output_dir}/playlist.m3u8"
+            ffmpeg_bin,
+            "-loglevel", "error",
+            "-i", rtsp_url,
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-tune", "zerolatency",
+            "-profile:v", "baseline",
+            "-level", "3.0",
+            "-g", "30",
+            "-sc_threshold", "0",
+            "-b:v", "2500k",  # 指定目标码率
+            "-maxrate", "2500k",  # 最大码率
+            "-bufsize", "5000k",  # 缓冲区大小
+            "-c:a", "aac",
+            "-ar", "44100",
+            "-f", "hls",
+            "-hls_time", "2",
+            "-hls_list_size", "6",
+            "-hls_flags", "append_list",  # 删除 delete_segments，防止只保留1个TS
+            "-hls_segment_type", "mpegts",
+            "-hls_segment_filename", segment_pattern,
+            playlist_path
         ]
 
-        logger.info(f"启动FFmpeg进程转换摄像头 {camera_id} 的RTSP流: {' '.join(ffmpeg_cmd)}")
-        process = subprocess.Popen(
-            ffmpeg_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True
-        )
+        logger.info(f"启动FFmpeg：{' '.join(ffmpeg_cmd)}")
 
-        stream_processes[camera_id] = process
-        time.sleep(3)
+        # 启动并持续读取stderr，防止缓冲阻塞
+        def log_ffmpeg_output(proc):
+            for line in proc.stderr:
+                logger.debug(f"FFmpeg: {line.strip()}")
 
-        if process.poll() is not None:
-            stderr = process.stderr.read().decode('utf-8')
-            logger.error(f"FFmpeg进程异常退出: {stderr}")
-            return jsonify({'error': f'流媒体转换失败: {stderr}'}), 500
+        if camera_id in ffmpeg_processes and ffmpeg_processes[camera_id].poll() is None:
+            logger.info(f"摄像头 {camera_id} 的FFmpeg进程已经在运行")
+        else:
+            process = subprocess.Popen(
+                ffmpeg_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                universal_newlines=True
+            )
+            ffmpeg_processes[camera_id] = process
+            threading.Thread(target=log_ffmpeg_output, args=(process,), daemon=True).start()
 
-        playlist_url = f"/static/streams/{camera_id}/playlist.m3u8"
-        return jsonify({'hls_url': playlist_url})
+        # 等待m3u8和ts生成
+        wait_time = 0
+        max_wait_time = 10
+        while wait_time < max_wait_time:
+            time.sleep(1)
+            wait_time += 1
+            if os.path.exists(playlist_path) and os.path.getsize(playlist_path) > 0:
+                ts_files = glob.glob(f"{output_dir}/*.ts")
+                if ts_files and os.path.getsize(ts_files[0]) > 0:
+                    return jsonify({
+                        'status': 'success',
+                        'message': '成功启动视频流',
+                        #'hls_url': f"D:/streams/{camera_id}/playlist.m3u8"
+                        'hls_url': f"http://localhost:8081/api/static/streams/{camera_id}/playlist.m3u8"
+                    })
 
+            # 检查进程是否崩溃
+            if ffmpeg_processes[camera_id].poll() is not None:
+                stderr_output = ffmpeg_processes[camera_id].stderr.read()
+                logger.error(f"FFmpeg进程异常终止：{stderr_output}")
+                return jsonify({
+                    'status': 'error',
+                    'message': f'流媒体转换失败: {stderr_output}'
+                }), 500
+
+        logger.error(f"HLS流初始化超时: {camera_id}")
+        return jsonify({
+            'status': 'error',
+            'message': '流媒体转换超时，未能生成初始片段'
+        }), 500
     except Exception as e:
-        logger.error(f"获取摄像头流失败: {str(e)}")
+        logger.error(f"启动摄像头流失败: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
-
-
-# 添加一个路由来直接提供HLS文件
-@app.route('/static/streams/<int:camera_id>/<path:filename>')
-def serve_hls_files(camera_id, filename):
-    """提供HLS流文件"""
-    directory = os.path.join(os.getcwd(), f"static/streams/{camera_id}")
-    return send_from_directory(directory, filename)
-
-
-# 添加一个清理函数，在应用退出时关闭所有流进程
-def cleanup_stream_processes():
-    """关闭所有流媒体转换进程"""
-    for camera_id, process in stream_processes.items():
-        try:
-            logger.info(f"关闭摄像头 {camera_id} 的流进程")
-            process.terminate()
-            process.wait(timeout=5)
-        except:
-            try:
-                process.kill()
-            except:
-                pass
-
-
-# 注册应用退出钩子
-atexit.register(cleanup_stream_processes)
+        return jsonify({
+            'status': 'error',
+            'message': f'启动摄像头流失败: {str(e)}'
+        }), 500
 
 
 # 添加停止特定摄像头流的API
 @app.route('/cameras/<int:camera_id>/stream/stop', methods=['POST'])
 def stop_camera_stream(camera_id):
-    """停止特定摄像头的流转换进程"""
-    if camera_id in stream_processes:
-        try:
-            stream_processes[camera_id].terminate()
-            stream_processes[camera_id].wait(timeout=5)
-            del stream_processes[camera_id]
-            return jsonify({'status': 'success', 'message': f'摄像头 {camera_id} 的流已停止'})
-        except Exception as e:
-            logger.error(f"停止摄像头流失败: {str(e)}")
-            return jsonify({'status': 'error', 'message': str(e)}), 500
-    else:
-        return jsonify({'status': 'warning', 'message': f'摄像头 {camera_id} 没有活动的流'}), 404
+    try:
+        # 检查是否有该摄像头的流进程
+        if camera_id in ffmpeg_processes:  # 使用 ffmpeg_processes 而不是 stream_processes
+            process = ffmpeg_processes[camera_id]
+            logger.info(f"正在停止摄像头 {camera_id} 的视频流进程")
 
+            # 在Windows上使用SIGTERM信号终止进程
+            if process.poll() is None:  # 检查进程是否仍在运行
+                process.terminate()  # 或使用 os.kill(process.pid, signal.SIGTERM)
+                process.wait(timeout=5)  # 等待进程终止，最多5秒
+
+            # 从字典中移除进程
+            del ffmpeg_processes[camera_id]  # 使用 ffmpeg_processes 而不是 stream_processes
+
+            # 清理所有HLS文件
+            output_dir = os.path.join(os.getcwd(), f"static/streams/{camera_id}")
+            if os.path.exists(output_dir):
+                try:
+                    for file in glob.glob(f"{output_dir}/*.ts") + glob.glob(f"{output_dir}/*.m3u8"):
+                        os.remove(file)
+                    logger.info(f"已清理摄像头 {camera_id} 的HLS文件")
+                except Exception as e:
+                    logger.warning(f"清理HLS文件失败: {str(e)}")
+
+            return jsonify({"status": "success", "message": f"摄像头 {camera_id} 的视频流已停止"})
+        else:
+            logger.warning(f"未找到摄像头 {camera_id} 的视频流进程")
+            return jsonify({"status": "warning", "message": "未找到对应的视频流进程"})
+
+    except Exception as e:
+        logger.error(f"停止视频流出错: {str(e)}")
+        return jsonify({"status": "error", "message": f"停止视频流出错: {str(e)}"})
 if __name__ == '__main__':
     socketio.run(app, host="0.0.0.0", debug=True, port=5000, allow_unsafe_werkzeug=True)

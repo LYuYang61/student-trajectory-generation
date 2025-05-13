@@ -260,6 +260,7 @@ class ReIDProcessor:
                     features = model(image_tensor)
                     # SBS和AGW模型的特征提取方式
                     feature_vector = features.cpu().numpy()[0]
+                    feature_vector = feature_vector / np.linalg.norm(feature_vector)
                     logger.info(f"FastReID {algorithm} 特征形状: {feature_vector.shape}")
                 else:
                     logger.error(f"不支持的算法: {algorithm}")

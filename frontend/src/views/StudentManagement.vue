@@ -222,7 +222,7 @@
           <el-descriptions-item label="结束时间">{{ trajectory.end_time }}</el-descriptions-item>
           <el-descriptions-item label="摄像头序列">{{ trajectory.camera_sequence }}</el-descriptions-item>
           <el-descriptions-item label="总距离(米)">{{ trajectory.total_distance }}</el-descriptions-item>
-          <el-descriptions-item label="平均速度(米/秒)">{{ trajectory.average_speed }}</el-descriptions-item>
+          <el-descriptions-item label="平均速度(米/分)">{{ trajectory.average_speed }}</el-descriptions-item>
           <el-descriptions-item label="创建时间">{{ trajectory.created_at }}</el-descriptions-item>
           <el-descriptions-item label="轨迹路径" :span="3">{{ formatTrajectoryPath(trajectory.path_points) }}
           </el-descriptions-item>

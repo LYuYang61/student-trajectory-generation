@@ -165,7 +165,7 @@ class PersonTracker:
                         self.tracks[track_id] = self.tracks[track_id][-max_trace_length:]
 
                     # 绘制边界框
-                    annotator.box_label([x1, y1, x2, y2], f"ID:{track_id} {conf:.2f}", color=color)
+                    annotator.box_label([x1, y1, x2, y2], f"student:{track_id} {conf:.2f}", color=color)
 
                     # 绘制轨迹
                     points = self.tracks[track_id]
