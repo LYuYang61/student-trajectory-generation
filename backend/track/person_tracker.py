@@ -34,8 +34,8 @@ class PersonTracker:
         self.colors = {}
 
         # 确保输出目录存在
-        os.makedirs('./results/images', exist_ok=True)
-        os.makedirs('./results/videos', exist_ok=True)
+        os.makedirs('./tracking_results/images', exist_ok=True)
+        os.makedirs('./tracking_results/videos', exist_ok=True)
 
     def _get_color(self, idx):
         """为每个轨迹ID生成唯一颜色"""
@@ -69,7 +69,7 @@ class PersonTracker:
             os.makedirs(save_dir, exist_ok=True)
             video_path = os.path.join(save_dir, 'results.mp4')
         else:
-            video_path = './results/videos/results.mp4'
+            video_path = './tracking_results/videos/results.mp4'
 
         # 视频预处理
         if isinstance(source, str) and not os.path.exists(source):
@@ -87,9 +87,23 @@ class PersonTracker:
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # 设置输出视频编码器
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
+        # 设置输出视频编码器为H.264
+        if platform.system() == 'Darwin':  # macOS
+            fourcc = cv2.VideoWriter_fourcc(*'avc1')
+        elif platform.system() == 'Linux':
+            fourcc = cv2.VideoWriter_fourcc(*'X264')
+        else:  # Windows
+            fourcc = cv2.VideoWriter_fourcc(*'H264')
+
+        # 如果H.264不可用，则回退到mp4v
+        try:
+            out = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
+            if not out.isOpened():
+                raise Exception("H.264编码器不可用")
+        except:
+            print("H.264编码器不可用，使用默认mp4v编码器")
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
 
         # 显示进度条的帧率间隔
         progress_interval = max(1, int(total_frames / 100))
@@ -201,7 +215,7 @@ class PersonTracker:
             frame_idx += 1
 
         # 保存最后一帧作为结果图像
-        cv2.imwrite('./results/images/results.jpg', frame)
+        cv2.imwrite('./tracking_results/images/results.jpg', frame)
 
         # 释放资源
         cap.release()

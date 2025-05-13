@@ -40,6 +40,7 @@
 </template>
 
 <script>
+import cameraIcon from '@/assets/camera-icon.png'
 /* eslint-disable no-undef */
 export default {
   name: 'BaiduMap',
@@ -330,18 +331,18 @@ export default {
         const point = new BMapGL.Point(camera.position[0], camera.position[1])
 
         // 创建自定义图标
-        const icon = new BMapGL.Icon(
-          'https://api.map.baidu.com/images/marker_red.png',
-          new BMapGL.Size(30, 30),
+        const myIcon = new BMapGL.Icon(
+          cameraIcon, // 使用导入的图标变量
+          new BMapGL.Size(24, 24),
           {
-            anchor: new BMapGL.Size(15, 30),
-            imageSize: new BMapGL.Size(30, 30)
+            anchor: new BMapGL.Size(12, 12),
+            imageSize: new BMapGL.Size(24, 24)
           }
         )
 
         // 创建标记
         const marker = new BMapGL.Marker(point, {
-          icon: icon,
+          icon: myIcon,
           title: `摄像头 ${camera.id}: ${camera.name || '未命名'}`
         })
 

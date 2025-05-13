@@ -172,12 +172,11 @@
             <div v-if="videoUrl" class="video-player">
               <!-- 普通视频播放器 -->
               <video
-                v-if="!isTracking || isLoadingTracking"
                 ref="historyVideo"
                 controls
                 autoplay
                 class="camera-video">
-                <source :src="videoUrl" type="video/mp4">
+                <source :src="activeVideoUrl" type="video/mp4">
                 您的浏览器不支持视频播放
               </video>
 
@@ -368,7 +367,7 @@ import {
   deleteCamera,
   getCameraVideos,
   trackHistoryVideo,
-  stopTrackingRequest, openFolder, playInLocalPlayer
+  stopTrackingRequest, openFolder, getTrackingVideoPath
 } from '../api/api'
 import axios from 'axios'
 
@@ -387,12 +386,14 @@ export default {
   data () {
     return {
       // 其他状态...
+      timeRangeChanged: false,
       isLoadingLiveVideo: false,
       streamRetryCount: 0,
       streamRetryMax: 3,
       isAdmin: false,
       isTrackingMinimized: false,
       trackingVideoPath: null, // 存储本地跟踪视频路径
+      trackingVideoUrl: '',
       // 摄像头列表和搜索
       cameras: [],
       searchQuery: '',
@@ -479,6 +480,21 @@ export default {
         camera.name.toLowerCase().includes(query) ||
         camera.camera_id.toString().includes(query)
       )
+    },
+
+    activeVideoUrl () {
+      // 如果选择了新的时间段，应该清除之前的跟踪结果视频并显示新的原始视频
+      if (this.timeRangeChanged) {
+        return this.videoUrl
+      }
+
+      // 如果有跟踪结果视频 URL 且不在加载中，优先显示跟踪结果
+      if (this.trackingVideoUrl && !this.isLoadingTracking) {
+        return this.trackingVideoUrl
+      }
+
+      // 否则显示原始视频
+      return this.videoUrl
     }
   },
   created () {
@@ -548,19 +564,11 @@ export default {
         })
     },
 
-    // 在本地播放器中播放视频
-    handlePlayInLocalPlayer () {
+    // 播放视频
+    async handlePlayInLocalPlayer () {
       // 获取当前选中的视频时间范围ID
       if (!this.selectedTimeRange) {
         this.$message.warning('请先选择一个视频时间段')
-        return
-      }
-
-      // 优先使用跟踪后的视频路径，如果没有则使用原始视频路径
-      const path = this.trackingVideoPath || this.videoUrl
-
-      if (!path) {
-        this.$message.warning('未获取到视频路径')
         return
       }
 
@@ -570,18 +578,36 @@ export default {
         return
       }
 
-      playInLocalPlayer(path, this.selectedCamera.camera_id, this.selectedTimeRange)
-        .then(response => {
-          if (response.data.status === 'success') {
-            this.$message.success('视频已在本地播放器中打开')
-          } else {
-            this.$message.error(`${response.data.message}`)
-          }
-        })
-        .catch(error => {
-          console.error('API调用失败:', error)
-          this.$message.error('播放视频失败，请检查网络连接')
-        })
+      try {
+        this.videoLoading = true
+        // 调用API获取跟踪视频路径
+        const response = await getTrackingVideoPath(
+          this.selectedCamera.camera_id,
+          this.selectedTimeRange
+        )
+
+        if (response.data.status === 'success' && response.data.data.tracking_video_url) {
+          // 更新跟踪视频URL
+          this.trackingVideoUrl = response.data.data.tracking_video_url
+
+          // 刷新视频元素以确保播放最新视频
+          this.$nextTick(() => {
+            const video = this.$refs.historyVideo
+            if (video) {
+              video.load()
+              video.play().catch(e => console.error('视频播放失败:', e))
+            }
+            this.$message.success('正在播放目标跟踪结果视频')
+          })
+        } else {
+          this.$message.info('未找到视频文件，请先进行录制或目标跟踪')
+        }
+      } catch (error) {
+        console.error('获取视频路径失败:', error)
+        this.$message.error('获取视频路径失败，请检查网络连接')
+      } finally {
+        this.videoLoading = false
+      }
     },
 
     // 最小化跟踪对话框
@@ -805,6 +831,7 @@ export default {
       this.availableTimeRanges = []
       this.videoUrl = ''
       this.trackingVideoPath = null // 确保清除跟踪视频路径
+      this.trackingVideoUrl = ''
 
       // 如果还在跟踪中，停止跟踪
       if (this.isTracking) {
@@ -1082,6 +1109,7 @@ export default {
 
       // 更新视频URL
       this.videoUrl = timeRange.video_path
+      this.trackingVideoUrl = null
 
       // 在下一个DOM更新周期中确保视频元素被重新加载
       this.$nextTick(() => {
@@ -1110,6 +1138,7 @@ export default {
       if (this.isTracking) return
 
       this.isTracking = true
+      this.timeRangeChanged = false
       this.isLoadingTracking = true
 
       // 显示跟踪对话框
@@ -1134,9 +1163,10 @@ export default {
             this.$message.success('视频处理完成')
             // 不自动显示视频，只保存视频路径
             this.trackingVideoPath = response.data.tracking_video_path
+            this.trackingVideoUrl = response.data.tracking_video_url // 更新跟踪视频URL
             // 提示用户使用本地播放按钮
             this.$message({
-              message: '处理完成，可使用"本地播放"按钮查看结果',
+              message: '处理完成，播放目标跟踪结果查看',
               type: 'info',
               duration: 5000
             })
@@ -1172,6 +1202,7 @@ export default {
         this.trackingDialogVisible = false
         this.isTrackingMinimized = false
         this.trackingVideoPath = null
+        this.trackingVideoUrl = ''
 
         // 尝试重置视频播放器
         if (this.$refs.historyVideo) {

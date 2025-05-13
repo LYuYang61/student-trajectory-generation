@@ -1,4 +1,5 @@
 import request from '../util/request'
+import axios from 'axios'
 
 // 视频跟踪相关 API
 export function trackHistoryVideo (params) {
@@ -35,15 +36,10 @@ export function openFolder (path, cameraId, videoTimeId) {
   })
 }
 
-// 在本地播放器中播放视频
-export function playInLocalPlayer (path, cameraId, videoTimeId) {
-  return request({
-    url: '/playInLocalPlayer',
-    method: 'post',
-    data: { path, cameraId, videoTimeId },
-    headers: {
-      'Content-Type': 'application/json'
-    }
+// 获取目标跟踪视频路径
+export function getTrackingVideoPath (cameraId, videoTimeId) {
+  return axios.get(`/api/cameras/${cameraId}/video-path`, {
+    params: { videoTimeId }
   })
 }
 

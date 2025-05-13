@@ -251,7 +251,7 @@ export default {
       filterResults: [],
       reIdOptions: {
         algorithm: 'mgn',
-        threshold: 80
+        threshold: 75
       },
       reIdProgress: {
         spatialTemporal: 0,
