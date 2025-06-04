@@ -24,6 +24,14 @@ class PersonTracker:
             iou: IoU阈值
             img_size: 处理图像大小
         """
+        # 将 tracker_config 转换为绝对路径
+        self.tracker_config = os.path.abspath(tracker_config)
+        print("tracker_config: " + self.tracker_config)
+        self.conf = conf
+        self.device = device
+        if not os.path.exists(self.tracker_config):
+            raise FileNotFoundError(f"跟踪器配置文件未找到: {self.tracker_config}")
+
         self.model = YOLO(model_path)
         self.tracker_config = tracker_config
         self.conf = conf
@@ -112,10 +120,10 @@ class PersonTracker:
         model_kwargs = {
             'conf': self.conf,
             'iou': self.iou,
-            'tracker': self.tracker_config,
+            'tracker': self.tracker_config, # bytesort.yaml/botsort.yaml
             'device': self.device,
             'classes': 0,  # 仅跟踪类别0(行人)
-            'agnostic_nms': True  # 添加这一行，使用 YOLOv8 自带的 NMS
+            'agnostic_nms': True
         }
 
         # 从第一帧开始读取

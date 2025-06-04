@@ -154,28 +154,28 @@ def process_json_to_db(json_file_path):
         logger.info("JSON文件中没有记录")
         return
 
-    selected_record = None
+    # 筛选需要处理的记录
+    valid_records = []
 
-    # 1. 从头查找第一个name不为unknown的记录
+    # 1. 筛选所有name不为unknown的记录
     for record in records:
-        if record.get('name') and record['name'].lower() != 'unknown' and record['name'].lower() != 'unkown':
-            selected_record = record
-            logger.info(f"找到name不为unknown的记录: {record['name']}")
-            break
+        name = record.get('name', '').lower()
+        if name and name != 'unknown' and name != 'unkown':
+            valid_records.append(record)
+            logger.info(f"添加name不为unknown的记录: {record['name']}")
 
-    # 2. 如果没找到，查找第一个bag为true的记录
-    if not selected_record:
-        for record in records:
-            if record.get('bag', '').lower() == 'true':
-                selected_record = record
-                logger.info("未找到有效name，选择第一个bag为true的记录")
-                break
+    # 2. 筛选name为unknown但bag为true的记录
+    for record in records:
+        name = record.get('name', '').lower()
+        if (name == 'unknown' or name == 'unkown' or not name) and record.get('bag', '').lower() == 'true':
+            valid_records.append(record)
+            logger.info(f"添加bag为true的记录")
 
-    # 3. 如果仍未找到，选择中间记录
-    if not selected_record:
+    # 如果没有有效记录，选择中间记录
+    if not valid_records:
         middle_index = len(records) // 2
-        selected_record = records[middle_index]
-        logger.info("未找到有效name或bag为true的记录，选择中间记录")
+        valid_records.append(records[middle_index])
+        logger.info("未找到有效记录，选择中间记录")
 
     # 连接数据库
     conn = None
@@ -183,63 +183,87 @@ def process_json_to_db(json_file_path):
         conn = pymysql.connect(**DB_CONFIG)
         cursor = conn.cursor()
 
-        # 获取camera_id
-        camera_id = int(selected_record['cameraid'].replace('camera', ''))
+        # 遍历所有有效记录并插入数据库
+        for selected_record in valid_records:
+            # 获取camera_id
+            camera_id = int(selected_record['cameraid'].replace('camera', ''))
 
-        # 根据camera_id从cameras表查询location_x和location_y
-        cursor.execute("SELECT location_x, location_y, name FROM cameras WHERE camera_id = %s", (camera_id,))
-        camera_data = cursor.fetchone()
+            # 根据camera_id从cameras表查询location_x和location_y
+            cursor.execute("SELECT location_x, location_y, name FROM cameras WHERE camera_id = %s", (camera_id,))
+            camera_data = cursor.fetchone()
 
-        if not camera_data:
-            logger.warning(f"未找到camera_id为{camera_id}的记录")
-            conn.close()
-            return
+            if not camera_data:
+                logger.warning(f"未找到camera_id为{camera_id}的记录")
+                continue
 
-        location_x, location_y, camera_name = camera_data
+            location_x, location_y, camera_name = camera_data
 
-        # 处理student_id
-        student_id = None
-        name = selected_record.get('name', '').lower()
+            # 处理student_id
+            student_id = None
+            name = selected_record.get('name', '').lower()
 
-        # 对于name不为unknown的记录，设置student_id为202121+后四位
-        if name and name != 'unknown' and name != 'unkown':
-            # 检查name格式是否为"lyy-8247"这样包含数字的格式
-            if '-' in name and name.split('-')[1].isdigit():
-                student_id = "202121" + name.split('-')[1][-4:].zfill(4)
-            else:
-                # 如果格式不匹配，尝试提取任何数字
-                import re
-                digits = re.findall(r'\d+', name)
-                if digits:
-                    student_id = "202121" + digits[0][-4:].zfill(4)
+            # 对于name不为unknown的记录，设置student_id为202121+后四位
+            if name and name != 'unknown' and name != 'unkown':
+                # 检查name格式是否为"lyy-8247"这样包含数字的格式
+                if '-' in name and name.split('-')[1].isdigit():
+                    student_id = "202121" + name.split('-')[1][-4:].zfill(4)
+                else:
+                    # 如果格式不匹配，尝试提取任何数字
+                    import re
+                    digits = re.findall(r'\d+', name)
+                    if digits:
+                        student_id = "202121" + digits[0][-4:].zfill(4)
 
+            timestamp = datetime.strptime(selected_record['time'], '%Y-%m-%d %H:%M:%S')
+
+            # 处理背包、雨伞和自行车的值
+            has_backpack = 1 if selected_record.get('bag', '').lower() == 'true' else 0
+            has_umbrella = 1 if selected_record.get('umbrella', '').lower() == 'true' else 0
+            has_bicycle = 1 if selected_record.get('bicycle', '').lower() == 'true' else 0
+
+            # 获取服装颜色
+            clothing_color = selected_record.get('cloth_color', '')
+
+            # 设置默认置信度为0.5
+            confidence_east = confidence_south = confidence_west = confidence_north = 0.5
+
+            # 根据方向设置对应的置信度
+            direction = selected_record.get('direction', 'static').lower()
+            if direction == "static":
+                # 对于static，所有方向置信度设为0.5
+                confidence_east = confidence_south = confidence_west = confidence_north = 0.5
+            elif direction == "东":
+                confidence_east = 1.0
+            elif direction == "南":
+                confidence_south = 1.0
+            elif direction == "西":
+                confidence_west = 1.0
+            elif direction == "北":
+                confidence_north = 1.0
+
+            # 准备student_records插入SQL
+            sql_student_records = """
+            INSERT INTO student_records
+            (student_id, camera_id, timestamp, location_x, location_y, has_backpack,
+            has_umbrella, has_bicycle, confidence_east, confidence_south,
+            confidence_west, confidence_north, clothing_color)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+
+            cursor.execute(sql_student_records,
+                           (student_id, camera_id, timestamp, location_x, location_y,
+                            has_backpack, has_umbrella, has_bicycle,
+                            confidence_east, confidence_south, confidence_west, confidence_north,
+                            clothing_color))
+
+            logger.info(
+                f"插入student_records: student_id={student_id}, camera_id={camera_id}, location_x={location_x}, location_y={location_y}")
+
+        # 对camera_videos表，只需要插入一条记录
+        # 使用第一条记录的时间戳来创建camera_videos记录
+        selected_record = valid_records[0]
         timestamp = datetime.strptime(selected_record['time'], '%Y-%m-%d %H:%M:%S')
-
-        # 处理背包、雨伞和自行车的值
-        has_backpack = 1 if selected_record.get('bag', '').lower() == 'true' else 0
-        has_umbrella = 1 if selected_record.get('umbrella', '').lower() == 'true' else 0
-        has_bicycle = 1 if selected_record.get('bicycle', '').lower() == 'true' else 0
-
-        # 获取服装颜色
-        clothing_color = selected_record.get('cloth_color', '')
-
-        # 设置默认置信度为0.5
-        confidence_east = confidence_south = confidence_west = confidence_north = 0.5
-
-        # 准备student_records插入SQL
-        sql_student_records = """
-        INSERT INTO student_records
-        (student_id, camera_id, timestamp, location_x, location_y, has_backpack,
-        has_umbrella, has_bicycle, confidence_east, confidence_south,
-        confidence_west, confidence_north, clothing_color)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-
-        cursor.execute(sql_student_records,
-                       (student_id, camera_id, timestamp, location_x, location_y,
-                        has_backpack, has_umbrella, has_bicycle,
-                        confidence_east, confidence_south, confidence_west, confidence_north,
-                        clothing_color))
+        camera_id = int(selected_record['cameraid'].replace('camera', ''))
 
         # 为camera_videos准备数据
         record_date = timestamp.date()
@@ -268,9 +292,7 @@ def process_json_to_db(json_file_path):
 
         # 提交事务
         conn.commit()
-        logger.info(f"成功插入数据：student_records表和camera_videos表")
-        logger.info(
-            f"插入student_records: student_id={student_id}, camera_id={camera_id}, location_x={location_x}, location_y={location_y}")
+        logger.info(f"成功插入数据：{len(valid_records)}条记录到student_records表和1条记录到camera_videos表")
         logger.info(
             f"插入camera_videos: camera_id={camera_id}, date={record_date}, start_time={start_time}, end_time={end_time}")
 
@@ -281,7 +303,6 @@ def process_json_to_db(json_file_path):
     finally:
         if conn:
             conn.close()
-
 
 def sync_oss_task():
     """同步OSS中的新JSON文件并处理"""

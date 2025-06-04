@@ -87,7 +87,7 @@
           label="操作"
           width="250">
           <template slot-scope="scope">
-            <template v-if="isAdmin">
+            <template>
               <el-button
                 type="info"
                 size="mini"
@@ -96,13 +96,14 @@
               >查看轨迹</el-button>
               <el-button
                 size="mini"
+                v-if="isAdmin"
                 @click="handleEdit(scope.row)">编辑</el-button>
               <el-button
                 size="mini"
                 type="danger"
+                v-if="isAdmin"
                 @click="handleDelete(scope.row)">删除</el-button>
             </template>
-            <span v-else>仅可查看</span>
           </template>
         </el-table-column>
       </el-table>

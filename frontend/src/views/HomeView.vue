@@ -164,7 +164,8 @@ export default {
             })
             .catch(error => {
               this.loading = false
-              this.$message.error(`登录失败：${(error.response && error.response.data && error.response.data.message) || '服务器错误'}`)
+              this.$message.error(`登录失败：${(error.response && error.response.data && error.response.data.message) ||
+                                  '服务器错误'}`)
             })
         }
       })
@@ -189,7 +190,8 @@ export default {
             })
             .catch(error => {
               this.loading = false
-              this.$message.error(`注册失败：${(error.response && error.response.data && error.response.data.message) || '服务器错误'}`)
+              this.$message.error(`注册失败：${(error.response && error.response.data && error.response.data.message) ||
+                                  '服务器错误'}`)
             })
         }
       })

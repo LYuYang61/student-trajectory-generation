@@ -63,12 +63,12 @@ class DatabaseInterface:
             self.conn.close()
             logger.info("Database connection closed")
 
-
     def query_student_records(self,
                               student_id: Optional[str] = None,
                               features: Optional[Dict[str, bool]] = None,
                               time_range: Optional[Tuple[datetime, datetime]] = None,
-                              camera_ids: Optional[List[int]] = None) -> pd.DataFrame:
+                              camera_ids: Optional[List[int]] = None,
+                              clothing_color: Optional[str] = None) -> pd.DataFrame:
         """
         查询学生记录
 
@@ -77,6 +77,7 @@ class DatabaseInterface:
             features: 特征字典，如 {'has_backpack': True, 'has_umbrella': False}，可选
             time_range: 时间范围(开始时间, 结束时间)，可选
             camera_ids: 摄像头ID列表，可选
+            clothing_color: 衣服颜色，可选
 
         Returns:
             包含学生记录的DataFrame
@@ -95,6 +96,11 @@ class DatabaseInterface:
                 for feature, value in features.items():
                     query_parts.append(f"AND {feature} = %s")
                     params.append(value)
+
+            # 衣服颜色过滤
+            if clothing_color:
+                query_parts.append("AND clothing_color = %s")
+                params.append(clothing_color)
 
             # 时间范围过滤
             if time_range:

@@ -266,16 +266,13 @@ export default {
       for (let i = 1; i < points.length; i++) {
         const prevPoint = points[i - 1]
         const currPoint = points[i]
-
         // 确保点有位置数据
         if (!prevPoint.position || !currPoint.position) {
           console.warn(`点 ${i - 1} 或 ${i} 缺少位置数据`, prevPoint, currPoint)
           continue
         }
-
         // 判断线段类型
         let strokeColor, strokeStyle
-
         // 根据点类型决定线的样式
         if ((prevPoint.type === 'camera' && currPoint.type === 'path') ||
           (prevPoint.type === 'path' && currPoint.type === 'camera') ||
@@ -288,7 +285,6 @@ export default {
           strokeColor = '#E6A23C'
           strokeStyle = 'dashed'
         }
-
         // 创建线段
         const polyline = new BMapGL.Polyline([
           new BMapGL.Point(prevPoint.position[0], prevPoint.position[1]),
@@ -299,11 +295,9 @@ export default {
           strokeOpacity: 0.8,
           strokeStyle: strokeStyle
         })
-
         // 添加到地图
         this.map.addOverlay(polyline)
         this.polylines.push(polyline)
-
         console.log(`已绘制线段 ${i}:`, prevPoint.position, '=>', currPoint.position)
       }
     },

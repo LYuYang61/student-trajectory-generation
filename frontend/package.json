@@ -2,7 +2,7 @@
   "name": "multi-tracking_front-end",
   "version": "1.0.0",
   "description": "A Vue.js project",
-  "author": "lihaoqiu <lihao.qiu.200108@gmail.com>",
+  "author": "lian",
   "private": true,
   "scripts": {
     "dev": "webpack-dev-server --inline --progress --config build/webpack.dev.conf.js",

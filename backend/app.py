@@ -279,10 +279,12 @@ def track_by_video():
                 'show': True
             }
 
+            tracker_config_path = os.path.join("resources/configs/", tracker_config)
+
             # 创建跟踪器并处理视频
             person_tracker = PersonTracker(
                 model_path=params['model_path'],
-                tracker_config=tracker_config,
+                tracker_config=tracker_config_path,
                 conf=conf,
                 device=params['device'],
                 iou=iou,
@@ -495,7 +497,7 @@ def filter_records():
                 'name': row.get('name', ''),
                 'has_backpack': bool(row.get('has_backpack', False)),
                 'has_umbrella': bool(row.get('has_umbrella', False)),
-                'has_bicycle': bool(row.get('has_bicycle', False))
+                'clothing_color': row.get('clothing_color', '')  # 替换 has_bicycle 为 clothing_color
             }
             results.append(record)
 
@@ -585,7 +587,7 @@ def analyze_spatiotemporal():
                 'name': str(row.get('name', f"摄像头{row.get('camera_id', 0)}")),  # 确保名称是字符串
                 'has_backpack': bool(row.get('has_backpack', False)),
                 'has_umbrella': bool(row.get('has_umbrella', False)),
-                'has_bicycle': bool(row.get('has_bicycle', False)),
+                'clothing_color': str(row.get('clothing_color', '')),
                 'location_x': float(row.get('location_x', 0.0)),
                 'location_y': float(row.get('location_y', 0.0))
             }
@@ -724,7 +726,7 @@ def feature_matching():
         else:
             return jsonify({'status': 'error', 'message': '缺少特征记录数据'})
 
-        threshold = data.get('threshold', 0.7)
+        threshold = data.get('threshold', 0.75)
 
         def progress_callback(stage, percentage):
             socketio.emit('reid_progress', {'stage': stage, 'percentage': percentage})
@@ -1632,7 +1634,6 @@ def login():
         # 将查询结果转换为字典
         user = dict(zip(columns, user_data))
 
-        # 使用正确的字段名 password_hash 而不是 password
         if bcrypt.checkpw(password.encode('utf-8'), user['password_hash'].encode('utf-8')):
             token_payload = {
                 'user_id': user['user_id'],
@@ -2187,15 +2188,15 @@ def stream_camera(camera_id):
             "-level", "3.0",
             "-g", "30",
             "-sc_threshold", "0",
-            "-b:v", "2500k",  # 指定目标码率
-            "-maxrate", "2500k",  # 最大码率
-            "-bufsize", "5000k",  # 缓冲区大小
+            "-b:v", "2500k",
+            "-maxrate", "2500k",
+            "-bufsize", "5000k",
             "-c:a", "aac",
             "-ar", "44100",
             "-f", "hls",
             "-hls_time", "2",
             "-hls_list_size", "6",
-            "-hls_flags", "append_list",  # 删除 delete_segments，防止只保留1个TS
+            "-hls_flags", "append_list",
             "-hls_segment_type", "mpegts",
             "-hls_segment_filename", segment_pattern,
             playlist_path

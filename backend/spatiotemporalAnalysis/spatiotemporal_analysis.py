@@ -139,22 +139,17 @@ class SpatiotemporalAnalysis:
 
         # 创建结果列表
         result_indices = []
-
         # 初始化第一个记录
         result_indices.append(0)
         prev_timestamp = timestamps.iloc[0]
         prev_location = locations.iloc[0]
-
         for i in range(1, len(sorted_records)):
             curr_timestamp = timestamps.iloc[i]
             curr_location = locations.iloc[i]
-
             # 计算时间差（秒）
             time_diff = (curr_timestamp - prev_timestamp).total_seconds()
-
             # 计算最小所需时间
             min_required_time = self.calculate_travel_time(prev_location, curr_location)
-
             # 如果时间差大于等于最小所需时间，则该记录是有效的
             if time_diff >= min_required_time:
                 result_indices.append(i)
@@ -174,61 +169,6 @@ class SpatiotemporalAnalysis:
         logger.info(f"过滤后记录示例: {filtered_records.iloc[0].to_dict() if len(filtered_records) > 0 else '无记录'}")
 
         return filtered_records
-
-    def create_trajectory_graph(self, records: pd.DataFrame) -> nx.DiGraph:
-        """
-        创建轨迹图，表示可能的学生移动
-
-        Args:
-            records: 学生记录DataFrame
-
-        Returns:
-            有向图，表示可能的移动路径
-        """
-        G = nx.DiGraph()
-
-        if records.empty or len(records) <= 1:
-            return G
-
-        if not all(col in records.columns for col in ['timestamp', 'location_x', 'location_y', 'camera_id']):
-            logger.warning("Records missing required columns for trajectory graph creation")
-            return G
-
-        # 按摄像头和时间分组记录
-        for camera_id, group in records.groupby('camera_id'):
-            camera_records = group.sort_values(by='timestamp')
-
-            # 为每个摄像头添加节点
-            for idx, row in camera_records.iterrows():
-                node_id = f"cam_{camera_id}_{idx}"
-                G.add_node(node_id,
-                           camera_id=camera_id,
-                           timestamp=row['timestamp'],
-                           location=(row['location_x'], row['location_y']),
-                           record_id=idx)
-
-        # 添加可能的边
-        nodes = list(G.nodes(data=True))
-        for i, (node1, node1_data) in enumerate(nodes):
-            for node2, node2_data in nodes[i + 1:]:
-                # 不同摄像头之间才需要考虑约束
-                if node1_data['camera_id'] != node2_data['camera_id']:
-                    time_diff = (node2_data['timestamp'] - node1_data['timestamp']).total_seconds()
-
-                    # 计算估计行走时间
-                    estimated_travel_time = self.calculate_travel_time(
-                        node1_data['location'],
-                        node2_data['location']
-                    )
-
-                    # 如果时间合理，添加有向边
-                    if time_diff > 0 and time_diff >= estimated_travel_time / 2:  # 允许一定程度的加速
-                        G.add_edge(node1, node2,
-                                   time_diff=time_diff,
-                                   estimated_travel_time=estimated_travel_time,
-                                   probability=min(1.0, estimated_travel_time / time_diff))
-
-        return G
 
     def find_most_likely_trajectory(self,
                                     records: pd.DataFrame,
@@ -353,81 +293,3 @@ class SpatiotemporalAnalysis:
                 })
 
         return anomalies
-
-    def build_campus_graph_from_data(self,
-                                     camera_locations: pd.DataFrame,
-                                     path_data: List[Dict[str, Any]] = None) -> nx.Graph:
-        """
-        从摄像头位置和路径数据构建校园地图图形
-
-        Args:
-            camera_locations: 摄像头位置DataFrame
-            path_data: 路径数据列表，每个元素是一个字典 {'from': camera_id1, 'to': camera_id2, 'distance': 实际距离}
-
-        Returns:
-            校园地图图形
-        """
-        G = nx.Graph()
-
-        # 添加摄像头节点
-        for _, cam in camera_locations.iterrows():
-            G.add_node(f"cam_{cam['camera_id']}",
-                       pos=(cam['location_x'], cam['location_y']),
-                       name=cam.get('name', f"Camera {cam['camera_id']}"))
-
-        # 如果提供了路径数据，添加边
-        if path_data:
-            for path in path_data:
-                from_id = f"cam_{path['from']}"
-                to_id = f"cam_{path['to']}"
-
-                if from_id in G and to_id in G:
-                    # 使用提供的实际距离
-                    G.add_edge(from_id, to_id, distance=path['distance'])
-        else:
-            # 否则，连接所有摄像头，使用欧几里得距离
-            nodes = list(G.nodes(data=True))
-            for i, (node1, node1_data) in enumerate(nodes):
-                for node2, node2_data in nodes[i + 1:]:
-                    dist = euclidean(node1_data['pos'], node2_data['pos'])
-                    G.add_edge(node1, node2, distance=dist)
-
-        self.campus_graph = G
-        return G
-
-    def get_trajectory_segments(self, records: pd.DataFrame) -> List[Dict[str, Any]]:
-        """
-        获取轨迹段
-
-        Args:
-            records: 学生记录DataFrame
-
-        Returns:
-            轨迹段列表，每个元素是一个字典
-        """
-        if records.empty or len(records) <= 1:
-            return []
-
-        # 确保按时间排序
-        sorted_records = records.sort_values(by='timestamp').reset_index(drop=True)
-
-        segments = []
-        for i in range(len(sorted_records) - 1):
-            start_record = sorted_records.iloc[i]
-            end_record = sorted_records.iloc[i + 1]
-
-            # 如果摄像头不同，表示一个轨迹段
-            if start_record['camera_id'] != end_record['camera_id']:
-                segments.append({
-                    'start_record_id': start_record.name,
-                    'end_record_id': end_record.name,
-                    'start_camera': start_record['camera_id'],
-                    'end_camera': end_record['camera_id'],
-                    'start_time': start_record['timestamp'],
-                    'end_time': end_record['timestamp'],
-                    'time_diff': (end_record['timestamp'] - start_record['timestamp']).total_seconds(),
-                    'start_location': (start_record['location_x'], start_record['location_y']),
-                    'end_location': (end_record['location_x'], end_record['location_y'])
-                })
-
-        return segments

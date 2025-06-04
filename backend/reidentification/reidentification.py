@@ -647,6 +647,10 @@ class ReIDProcessor:
                 logger.info(f"加载本地YOLOv8模型: {model_path}")
                 model = YOLO(model_path)
 
+            # 强制使用 CPU
+            device = 'cpu'
+            model.to(device)  # 将模型移动到 CPU
+
             person_images = []
 
             # 创建保存目录
@@ -696,11 +700,8 @@ class ReIDProcessor:
                         if box_width < min_width or box_height < min_height:
                             logger.info(f"跳过太小的行人边界框: {box_width}x{box_height}, 帧{i}, 检测{k}")
                             continue
-
-                        # 优化边界框 - 扩展框让身体完整显示（尤其是头部和脚部）
                         # 计算扩展比例，保持纵横比约为1:2（身高:宽度=2:1）
                         aspect_ratio = box_height / box_width
-
                         if aspect_ratio < 2:  # 如果人物太"扁"，增加高度
                             height_extension = int((2 * box_width - box_height) / 2)
                             y1 = max(0, y1 - height_extension)

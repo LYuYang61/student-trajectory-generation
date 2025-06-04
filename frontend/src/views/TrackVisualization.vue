@@ -34,8 +34,17 @@
               <el-checkbox-group v-model="filterForm.attributes">
                 <el-checkbox label="umbrella">雨伞</el-checkbox>
                 <el-checkbox label="backpack">背包</el-checkbox>
-                <el-checkbox label="bicycle">自行车</el-checkbox>
+                <!-- 删除自行车选项，添加衣服颜色选择 -->
               </el-checkbox-group>
+              <el-select v-model="filterForm.clothingColor" placeholder="选择衣服颜色" class="color-select">
+                <el-option label="白色" value="white"></el-option>
+                <el-option label="黑色" value="black"></el-option>
+                <el-option label="红色" value="red"></el-option>
+                <el-option label="蓝色" value="blue"></el-option>
+                <el-option label="绿色" value="green"></el-option>
+                <el-option label="黄色" value="yellow"></el-option>
+                <el-option label="灰色" value="gray"></el-option>
+              </el-select>
             </el-form-item>
             <el-form-item label="参考图片">
               <div class="image-upload-area">
@@ -243,10 +252,11 @@ export default {
     return {
       activeStep: 1,
       filterForm: {
-        studentId: '',
-        timeRange: [new Date(new Date().setHours(0, 0, 0, 0)), new Date()],
-        attributes: [],
-        referenceImage: ''
+        studentId: '', // 学号
+        timeRange: [new Date(new Date().setHours(0, 0, 0, 0)), new Date()], // 时间范围
+        attributes: [], // 属性过滤
+        clothingColor: '', // 衣服颜色
+        referenceImage: ''// 参考图片
       },
       filterResults: [],
       reIdOptions: {
@@ -417,8 +427,9 @@ export default {
         if (this.filterForm.attributes.includes('backpack')) {
           requestData.attributes.has_backpack = true
         }
-        if (this.filterForm.attributes.includes('bicycle')) {
-          requestData.attributes.has_bicycle = true
+        // 添加衣服颜色属性
+        if (this.filterForm.clothingColor) {
+          requestData.attributes.clothing_color = this.filterForm.clothingColor
         }
 
         // 如果有参考图片，添加到请求中
@@ -439,10 +450,9 @@ export default {
               name: record.name || `摄像头${record.camera_id}`,
               timestamp: record.timestamp,
               matchedAttributes: this.getMatchedAttributes(record),
-              // image: record.image_base64 || `https://picsum.photos/id/${record.id * 10}/300/200`,
               has_backpack: record.has_backpack,
               has_umbrella: record.has_umbrella,
-              has_bicycle: record.has_bicycle
+              clothing_color: record.clothing_color // 替换 has_bicycle 为 clothing_color
             }
           })
 
@@ -470,7 +480,20 @@ export default {
       const attributes = []
       if (record.has_umbrella) attributes.push('雨伞')
       if (record.has_backpack) attributes.push('背包')
-      if (record.has_bicycle) attributes.push('自行车')
+      // 添加衣服颜色属性的显示
+      if (record.clothing_color) {
+        // 将英文颜色名称转换为中文显示
+        const colorMap = {
+          'white': '白色',
+          'black': '黑色',
+          'red': '红色',
+          'blue': '蓝色',
+          'green': '绿色',
+          'yellow': '黄色',
+          'gray': '灰色'
+        }
+        attributes.push(`${colorMap[record.clothing_color] || record.clothing_color}衣服`)
+      }
       return attributes
     },
 
@@ -566,7 +589,7 @@ export default {
               name: record.name || null,
               has_backpack: record.has_backpack,
               has_umbrella: record.has_umbrella,
-              has_bicycle: record.has_bicycle
+              clothing_color: record.clothing_color || null
             }
           })
         }
@@ -592,7 +615,7 @@ export default {
               name: record.name,
               has_backpack: record.has_backpack,
               has_umbrella: record.has_umbrella,
-              has_bicycle: record.has_bicycle,
+              clothing_color: record.clothing_color,
               location_x: record.location_x,
               location_y: record.location_y
             }
@@ -1282,5 +1305,13 @@ export default {
 
 .video-info p {
   margin: 5px 0;
+}
+
+.color-select {
+  margin-top: 1px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
 }
 </style>
